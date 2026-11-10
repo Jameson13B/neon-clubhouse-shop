@@ -65,7 +65,9 @@ jobs:
 
       # Push the exact image that passed the check (no rebuild)
       - name: Push
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          for tag in ${{ steps.meta.outputs.tags }}; do
+          for tag in $TAGS; do
             docker push "$tag"
           done
