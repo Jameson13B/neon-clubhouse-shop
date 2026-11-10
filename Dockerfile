@@ -22,7 +22,7 @@ ARG PHP_VERSION=8.4
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
-LABEL org.opencontainers.image.source="https://github.com/Jameson13B/neon-clubhouse" \
+LABEL org.opencontainers.image.source="https://github.com/Jameson13B/neon-clubhouse-shop" \
       org.opencontainers.image.description="Bagisto Laravel e-commerce, packaged for ONCE"
 
 RUN apt-get update && apt-get install -y \
