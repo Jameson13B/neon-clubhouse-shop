@@ -10,6 +10,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   IMAGE: ghcr.io/jameson13b/neon-clubhouse-shop
 
@@ -19,13 +23,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build for the health check
-        run: docker build -t health-check .
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha
+
+      # Build once, with layers cached between runs, and load it locally
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Check /up returns 200 on port 80
         run: |
-          docker run -d --name app -p 8080:80 health-check
-          for i in $(seq 1 240); do
+          image=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          docker run -d --name app -p 8080:80 "$image"
+          for i in $(seq 1 120); do
             status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8080/up || true)
             [ "$status" = "200" ] && echo "/up returned 200" && exit 0
             sleep 1
@@ -40,18 +63,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=sha
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+      # Push the exact image that passed the check (no rebuild)
+      - name: Push
+        run: |
+          for tag in ${{ steps.meta.outputs.tags }}; do
+            docker push "$tag"
+          done
