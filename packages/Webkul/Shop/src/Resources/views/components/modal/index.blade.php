@@ -1,0 +1,243 @@
+@props([
+    'isActive' => false,
+])
+
+<v-modal
+    is-active="{{ $isActive }}"
+    {{ $attributes }}
+>
+    @isset($toggle)
+        <template v-slot:toggle>
+            {{ $toggle }}
+        </template>
+    @endisset
+
+    @isset($header)
+        <template v-slot:header="{ toggle, isOpen }">
+            <div {{ $header->attributes->merge(['class' => 'flex items-center justify-between gap-5 border-b border-zinc-200 bg-white p-8 max-sm:px-4 max-sm:py-3']) }}>
+                {{ $header }}
+
+                <button
+                    type="button"
+                    class="icon-cancel cursor-pointer text-3xl max-sm:text-2xl focus-visible:ring-2 focus-visible:ring-navyBlue focus-visible:ring-offset-2 focus-visible:outline-hidden rounded-sm bg-transparent border-0"
+                    aria-label="Close modal"
+                    @click="toggle"
+                >
+                </button>
+            </div>
+        </template>
+    @endisset
+
+    @isset($content)
+        <template v-slot:content>
+            <div {{ $content->attributes->merge(['class' => 'bg-white p-8 max-sm:p-5']) }}>
+                {{ $content }}
+            </div>
+        </template>
+    @endisset
+
+    @isset($footer)
+        <template v-slot:footer>
+            <div {{ $footer->attributes->merge(['class' => 'mt-5 bg-white p-8 max-sm:mt-0.5 max-sm:py-4 max-sm:px-4']) }}>
+                {{ $footer }}
+            </div>
+        </template>
+    @endisset
+</v-modal>
+
+@pushOnce('scripts')
+    <script
+        type="text/x-template"
+        id="v-modal-template"
+    >
+        <div>
+            <div
+                class="w-max max-md:w-full"
+                @click="toggle"
+            >
+                <slot name="toggle">
+                </slot>
+            </div>
+
+            <transition
+                tag="div"
+                name="modal-overlay"
+                enter-class="duration-300 ease-out"
+                enter-from-class="opacity-0"
+                enter-to-class="opacity-100"
+                leave-class="duration-200 ease-in"
+                leave-from-class="opacity-100"
+                leave-to-class="opacity-0"
+            >
+                <div
+                    class="fixed inset-0 z-80 bg-gray-500/50 transition-opacity"
+                    v-show="isOpen"
+                ></div>
+            </transition>
+
+            <transition
+                tag="div"
+                name="modal-content"
+                enter-class="duration-300 ease-out"
+                enter-from-class="translate-y-4 opacity-0 md:translate-y-0 md:scale-95"
+                enter-to-class="translate-y-0 opacity-100 md:scale-100"
+                leave-class="duration-200 ease-in"
+                leave-from-class="translate-y-0 opacity-100 md:scale-100"
+                leave-to-class="translate-y-4 opacity-0 md:translate-y-0 md:scale-95"
+            >
+                <div
+                    class="fixed inset-0 z-80 transform overflow-y-auto transition focus-visible:outline-hidden" 
+                    v-show="isOpen"
+                    role="dialog"
+                    aria-modal="true"
+                    ref="modalContainer"
+                    tabindex="-1"
+                >
+                    <div class="flex min-h-full items-end justify-center p-4 sm:items-center sm:p-0">
+                        <div
+                            class="absolute left-1/2 top-1/2 z-10 w-full -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg bg-zinc-100 max-md:w-9/10"
+                            :class="panelClass || 'max-w-148.75'"
+                        >
+                            <!-- Header Slot-->
+                            <slot
+                                name="header"
+                                :toggle="toggle"
+                                :isOpen="isOpen"
+                            >
+                            </slot>
+
+                            <!-- Content Slot-->
+                            <slot name="content"></slot>
+
+                            <!-- Footer Slot-->
+                            <slot name="footer"></slot>
+                        </div>
+                    </div>
+                </div>
+            </transition>
+        </div>
+    </script>
+
+    <script type="module">
+        app.component('v-modal', {
+            template: '#v-modal-template',
+
+            props: ['isActive', 'panelClass'],
+
+            data() {
+                return {
+                    isOpen: this.isActive,
+                    previousActiveElement: null,
+                };
+            },
+
+            watch: {
+                isActive(newVal) {
+                    this.isOpen = newVal;
+                },
+
+                isOpen(newVal) {
+                    if (newVal) {
+                        this.previousActiveElement = document.activeElement;
+                        this.$nextTick(() => {
+                            const focusable = this.getFocusableElements();
+                            if (focusable.length > 0) {
+                                focusable[0].focus();
+                            } else if (this.$refs.modalContainer) {
+                                this.$refs.modalContainer.focus();
+                            }
+                        });
+                        window.addEventListener('keydown', this.handleGlobalKeyDown);
+                    } else {
+                        window.removeEventListener('keydown', this.handleGlobalKeyDown);
+                        if (this.previousActiveElement && typeof this.previousActiveElement.focus === 'function') {
+                            this.previousActiveElement.focus();
+                        }
+                    }
+                }
+            },
+
+            beforeUnmount() {
+                window.removeEventListener('keydown', this.handleGlobalKeyDown);
+            },
+
+            methods: {
+                toggle() {
+                    this.isOpen = ! this.isOpen;
+
+                    if (this.isOpen) {
+                        const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+                        document.body.style.overflow = 'hidden';
+
+                        document.body.style.paddingRight = `${scrollbarWidth}px`;
+                    } else {
+                        document.body.style.overflow ='auto';
+
+                        document.body.style.paddingRight = '';
+                    }
+
+                    this.$emit('toggle', { isActive: this.isOpen });
+                },
+
+                open() {
+                    this.isOpen = true;
+
+                    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+                    document.body.style.overflow = 'hidden';
+
+                    document.body.style.paddingRight = `${scrollbarWidth}px`;
+
+                    this.$emit('open', { isActive: this.isOpen });
+                },
+
+                close() {
+                    this.isOpen = false;
+
+                    document.body.style.overflow = 'auto';
+
+                    document.body.style.paddingRight = '';
+
+                    this.$emit('close', { isActive: this.isOpen });
+                },
+
+                getFocusableElements() {
+                    if (! this.$refs.modalContainer) return [];
+                    return Array.from(
+                        this.$refs.modalContainer.querySelectorAll(
+                            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+                        )
+                    ).filter(el => ! el.hasAttribute('disabled') && el.offsetParent !== null);
+                },
+
+                handleGlobalKeyDown(e) {
+                    if (e.key === 'Escape') {
+                        this.close();
+                        return;
+                    }
+                    if (e.key === 'Tab') {
+                        const focusable = this.getFocusableElements();
+                        if (focusable.length === 0) {
+                            e.preventDefault();
+                            return;
+                        }
+                        const first = focusable[0];
+                        const last = focusable[focusable.length - 1];
+                        if (e.shiftKey) {
+                            if (document.activeElement === first) {
+                                last.focus();
+                                e.preventDefault();
+                            }
+                        } else {
+                            if (document.activeElement === last) {
+                                first.focus();
+                                e.preventDefault();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+@endPushOnce

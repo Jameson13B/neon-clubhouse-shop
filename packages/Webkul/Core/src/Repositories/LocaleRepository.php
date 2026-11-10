@@ -1,0 +1,131 @@
+<?php
+
+namespace Webkul\Core\Repositories;
+
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
+use Prettus\Repository\Events\RepositoryEntityCreated;
+use Prettus\Repository\Events\RepositoryEntityUpdated;
+use Webkul\Core\Contracts\Locale;
+use Webkul\Core\Eloquent\Repository;
+use Webkul\Core\Traits\Sanitizer;
+
+class LocaleRepository extends Repository
+{
+    use Sanitizer;
+
+    /**
+     * Specify model class name.
+     */
+    public function model(): string
+    {
+        return Locale::class;
+    }
+
+    /**
+     * Create a locale, invalidating the cached reads only once its image is
+     * written, so a concurrent read cannot cache a partial one.
+     *
+     * @return mixed
+     */
+    public function create(array $attributes)
+    {
+        $locale = DB::transaction(function () use ($attributes) {
+            $locale = parent::create($attributes);
+
+            $this->uploadImage($attributes, $locale);
+
+            return $locale;
+        });
+
+        Event::dispatch(new RepositoryEntityCreated($this, $locale));
+
+        return $locale;
+    }
+
+    /**
+     * Update a locale, invalidating the cached reads only once its image is
+     * written, so a concurrent read cannot cache a partial one.
+     *
+     * @return mixed
+     */
+    public function update(array $attributes, $id)
+    {
+        $locale = DB::transaction(function () use ($attributes, $id) {
+            $locale = parent::update($attributes, $id);
+
+            $this->uploadImage($attributes, $locale);
+
+            return $locale;
+        });
+
+        Event::dispatch(new RepositoryEntityUpdated($this, $locale));
+
+        return $locale;
+    }
+
+    /**
+     * Delete.
+     *
+     * @param  int  $id
+     * @return void
+     */
+    public function delete($id)
+    {
+        Event::dispatch('core.locale.delete.before', $id);
+
+        $locale = parent::find($id);
+
+        parent::delete($id);
+
+        Storage::delete((string) $locale->logo_path);
+
+        Event::dispatch('core.locale.delete.after', $id);
+    }
+
+    /**
+     * Upload image, moving it onto the locale's fixed path only once it is sanitized, so that a
+     * refused file cannot remove the logo the locale already holds.
+     *
+     * @param  array  $localeImages
+     * @param  \Webkul\Core\Models\Locale  $locale
+     * @return void
+     */
+    public function uploadImage($localeImages, $locale)
+    {
+        if (! isset($localeImages['logo_path'])) {
+            if (! empty($localeImages['logo_path'])) {
+                Storage::delete((string) $locale->logo_path);
+            }
+
+            $locale->logo_path = null;
+
+            $locale->save();
+
+            return;
+        }
+
+        foreach ($localeImages['logo_path'] as $image) {
+            if ($image instanceof UploadedFile) {
+                $mimeType = $image->getMimeType();
+
+                $path = $image->store('locales');
+
+                if (! $this->sanitizeSVG($path, $mimeType)) {
+                    throw ValidationException::withMessages([
+                        'logo_path' => trans('core::app.errors.invalid-svg'),
+                    ]);
+                }
+
+                $locale->logo_path = 'locales/'.$locale->code.'.'.$image->getClientOriginalExtension();
+
+                Storage::move($path, $locale->logo_path);
+
+                $locale->save();
+            }
+        }
+    }
+}

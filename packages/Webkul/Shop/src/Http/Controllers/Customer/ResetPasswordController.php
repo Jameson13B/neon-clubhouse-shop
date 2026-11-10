@@ -1,0 +1,131 @@
+<?php
+
+namespace Webkul\Shop\Http\Controllers\Customer;
+
+use Illuminate\Auth\Events\PasswordReset;
+use Illuminate\Contracts\Auth\CanResetPassword;
+use Illuminate\Contracts\Auth\PasswordBroker;
+use Illuminate\Foundation\Auth\ResetsPasswords;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
+use Illuminate\View\View;
+use Webkul\Core\Helpers\SessionPurger;
+use Webkul\Customer\Repositories\CustomerRepository;
+use Webkul\Shop\Http\Controllers\Controller;
+
+class ResetPasswordController extends Controller
+{
+    use ResetsPasswords;
+
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(protected CustomerRepository $customerRepository) {}
+
+    /**
+     * Display the password reset view for the given token.
+     *
+     * If no token is present, display the link request form.
+     *
+     * @param  string|null  $token
+     * @return View
+     */
+    public function create($token = null)
+    {
+        return view('shop::customers.reset-password')->with([
+            'token' => $token,
+            'email' => request('email'),
+        ]);
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @return Response
+     */
+    public function store()
+    {
+        try {
+            $this->validate(request(), [
+                'token' => 'required',
+                'email' => 'required|email',
+                'password' => 'required|confirmed|min:6',
+            ]);
+
+            $response = $this->broker()->reset(
+                $this->credentials(request()), function ($customer, $password) {
+                    $this->resetPassword($customer, $password);
+                }
+            );
+
+            if ($response == Password::PASSWORD_RESET) {
+                $customer = $this->customerRepository->findOneWhere([
+                    'email' => request('email'),
+                    'channel_id' => core()->getCurrentChannel()->id,
+                ]);
+
+                Event::dispatch('customer.password.update.after', $customer);
+
+                return redirect()->route('shop.customers.account.profile.index');
+            }
+
+            return back()
+                ->withInput(request(['email']))
+                ->withErrors([
+                    'email' => trans($response),
+                ]);
+        } catch (\Exception $e) {
+            session()->flash('error', trans($e->getMessage()));
+
+            return redirect()->back();
+        }
+    }
+
+    /**
+     * Get the broker to be used during password reset.
+     *
+     * @return PasswordBroker
+     */
+    public function broker()
+    {
+        return Password::broker('customers');
+    }
+
+    /**
+     * Reset the given customer password.
+     *
+     * @param  CanResetPassword  $customer
+     * @param  string  $password
+     * @return void
+     */
+    protected function resetPassword($customer, $password)
+    {
+        $customer->password = Hash::make($password);
+
+        $customer->setRememberToken(Str::random(60));
+
+        $customer->save();
+
+        app(SessionPurger::class)->forget('customer', $customer->id);
+
+        event(new PasswordReset($customer));
+    }
+
+    /**
+     * The credentials a password is reset with, scoped to the current channel because a customer
+     * may only sign in on the channel they registered against.
+     */
+    protected function credentials(Request $request): array
+    {
+        return array_merge(
+            $request->only(['email', 'password', 'password_confirmation', 'token']),
+            ['channel_id' => core()->getCurrentChannel()->id],
+        );
+    }
+}

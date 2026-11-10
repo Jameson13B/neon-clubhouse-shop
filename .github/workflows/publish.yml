@@ -1,0 +1,57 @@
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/jameson13b/neon-clubhouse
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build for the health check
+        run: docker build -t health-check .
+
+      - name: Check /up returns 200 on port 80
+        run: |
+          docker run -d --name app -p 8080:80 health-check
+          for i in $(seq 1 240); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8080/up || true)
+            [ "$status" = "200" ] && echo "/up returned 200" && exit 0
+            sleep 1
+          done
+          echo "/up returned $status, want 200"
+          docker logs app
+          exit 1
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -1,0 +1,483 @@
+<?php
+
+namespace Webkul\Paypal\Http\Controllers;
+
+use Illuminate\Database\QueryException;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Response;
+use Webkul\Checkout\Facades\Cart;
+use Webkul\Paypal\Payment\SmartButton;
+use Webkul\Sales\Models\Order;
+use Webkul\Sales\Repositories\InvoiceRepository;
+use Webkul\Sales\Repositories\OrderRepository;
+use Webkul\Sales\Repositories\OrderTransactionRepository;
+use Webkul\Sales\Transformers\OrderResource;
+
+class SmartButtonController extends Controller
+{
+    /**
+     * The PayPal order status that means the shopper has approved the payment.
+     */
+    protected const APPROVED_STATUS = 'APPROVED';
+
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected OrderRepository $orderRepository,
+        protected OrderTransactionRepository $orderTransactionRepository,
+        protected InvoiceRepository $invoiceRepository,
+        protected SmartButton $smartButton,
+    ) {}
+
+    /**
+     * Paypal order creation for approval of client.
+     *
+     * @return JsonResponse
+     */
+    public function createOrder()
+    {
+        abort_if(! $this->smartButton->isAvailable(), 404);
+
+        try {
+            $order = $this->smartButton->createOrder($this->buildRequestBody());
+
+            return response()->json(['result' => $order]);
+        } catch (\Exception $e) {
+            return $this->errorResponse($e);
+        }
+    }
+
+    /**
+     * Capturing paypal order after approval.
+     *
+     * @return Response
+     */
+    public function captureOrder()
+    {
+        abort_if(! $this->smartButton->isAvailable(), 404);
+
+        if (
+            Cart::hasError()
+            || Cart::requiresSignInToCheckout()
+        ) {
+            return $this->redirectToCart();
+        }
+
+        try {
+            Cart::collectTotals();
+
+            if (! $this->approvalCoversCart(Cart::getCart())) {
+                return $this->redirectToCart();
+            }
+
+            $this->smartButton->captureOrder(request()->input('orderData.orderID'));
+
+            return $this->saveOrder();
+        } catch (\Exception $e) {
+            return $this->errorResponse($e);
+        }
+    }
+
+    /**
+     * Build request body.
+     *
+     * @return array
+     */
+    protected function buildRequestBody()
+    {
+        $cart = Cart::getCart();
+
+        $billingAddressLines = $this->getAddressLines($cart->billing_address->address);
+
+        $data = [
+            'intent' => 'CAPTURE',
+
+            'payer' => [
+                'name' => [
+                    'given_name' => $cart->billing_address->first_name,
+                    'surname' => $cart->billing_address->last_name,
+                ],
+
+                'address' => [
+                    'address_line_1' => current($billingAddressLines),
+                    'address_line_2' => last($billingAddressLines),
+                    'admin_area_2' => $cart->billing_address->city,
+                    'admin_area_1' => $cart->billing_address->state,
+                    'postal_code' => $cart->billing_address->postcode,
+                    'country_code' => $cart->billing_address->country,
+                ],
+
+                'email_address' => $cart->billing_address->email,
+            ],
+
+            'application_context' => [
+                'shipping_preference' => 'NO_SHIPPING',
+            ],
+
+            'purchase_units' => [
+                [
+                    'amount' => [
+                        'value' => $this->smartButton->formatCurrencyValue($this->payableTotal($cart)),
+                        'currency_code' => $cart->cart_currency_code,
+
+                        'breakdown' => $this->buildAmountBreakdown($cart),
+                    ],
+
+                    'items' => $this->getLineItems($cart),
+                ],
+            ],
+        ];
+
+        if (! empty($cart->billing_address->phone)) {
+            $data['payer']['phone'] = [
+                'phone_type' => 'MOBILE',
+
+                'phone_number' => [
+                    'national_number' => $this->smartButton->formatPhone($cart->billing_address->phone),
+                ],
+            ];
+        }
+
+        if (
+            $cart->haveStockableItems()
+            && $cart->shipping_address
+        ) {
+            $data['application_context']['shipping_preference'] = 'SET_PROVIDED_ADDRESS';
+
+            $data['purchase_units'][0] = array_merge($data['purchase_units'][0], [
+                'shipping' => [
+                    'address' => [
+                        'address_line_1' => current($billingAddressLines),
+                        'address_line_2' => last($billingAddressLines),
+                        'admin_area_2' => $cart->shipping_address->city,
+                        'admin_area_1' => $cart->shipping_address->state,
+                        'postal_code' => $cart->shipping_address->postcode,
+                        'country_code' => $cart->shipping_address->country,
+                    ],
+                ],
+            ]);
+        }
+
+        return $data;
+    }
+
+    /**
+     * The breakdown PayPal requires, whose parts have to add up to the amount charged.
+     */
+    protected function buildAmountBreakdown($cart): array
+    {
+        $breakdown = [];
+
+        foreach ($this->payableComponents($cart) as $component => $value) {
+            $breakdown[$component] = [
+                'currency_code' => $cart->cart_currency_code,
+                'value' => $this->smartButton->formatCurrencyValue($value),
+            ];
+        }
+
+        return $breakdown;
+    }
+
+    /**
+     * Return cart items.
+     *
+     * @param  string  $cart
+     * @return array
+     */
+    protected function getLineItems($cart)
+    {
+        $lineItems = [];
+
+        foreach ($cart->items as $item) {
+            $lineItems[] = [
+                'unit_amount' => [
+                    'currency_code' => $cart->cart_currency_code,
+                    'value' => $this->smartButton->formatCurrencyValue((float) $item->price),
+                ],
+                'quantity' => $item->quantity,
+                'name' => $item->name,
+                'sku' => $item->sku,
+                'category' => $item->getTypeInstance()->isStockable() ? 'PHYSICAL_GOODS' : 'DIGITAL_GOODS',
+            ];
+        }
+
+        return $lineItems;
+    }
+
+    /**
+     * Return convert multiple address lines into 2 address lines.
+     *
+     * @param  string  $address
+     * @return array
+     */
+    protected function getAddressLines($address)
+    {
+        $address = explode(PHP_EOL, $address, 2);
+
+        $addressLines = [current($address)];
+
+        if (isset($address[1])) {
+            $addressLines[] = str_replace(["\r\n", "\r", "\n"], ' ', last($address));
+        } else {
+            $addressLines[] = '';
+        }
+
+        return $addressLines;
+    }
+
+    /**
+     * What this cart comes to in its own currency, which is the figure PayPal is asked to
+     * charge and the figure a capture is checked against.
+     */
+    protected function payableTotal($cart): float
+    {
+        $components = $this->payableComponents($cart);
+
+        return $components['item_total']
+            + $components['shipping']
+            + $components['tax_total']
+            - $components['discount'];
+    }
+
+    /**
+     * The parts this cart's total is made up of, under the names PayPal gives them, so the
+     * breakdown sent and the total charged can never disagree.
+     */
+    protected function payableComponents($cart): array
+    {
+        return [
+            'item_total' => (float) $cart->sub_total,
+            'shipping' => (float) ($cart->selected_shipping_rate ? $cart->selected_shipping_rate->price : 0),
+            'tax_total' => (float) $cart->tax_total,
+            'discount' => (float) $cart->discount_amount,
+        ];
+    }
+
+    /**
+     * Saving order once captured and all formalities done.
+     *
+     * @return Response
+     */
+    protected function saveOrder()
+    {
+        if (Cart::hasError()) {
+            return $this->redirectToCart();
+        }
+
+        try {
+            Cart::collectTotals();
+
+            $this->validateOrder();
+
+            $cart = Cart::getCart();
+
+            if ($placed = $this->orderRepository->findOneWhere(['cart_id' => $cart->id])) {
+                session()->flash('order_id', $placed->id);
+
+                return response()->json([
+                    'success' => true,
+                ]);
+            }
+
+            if (! $this->captureCoversCart($cart)) {
+                return $this->redirectToCart();
+            }
+
+            $data = (new OrderResource($cart))->jsonSerialize();
+
+            $order = $this->orderRepository->create($data);
+
+            $this->orderRepository->update(['status' => 'processing'], $order->id);
+
+            if ($order->canInvoice()) {
+                $invoice = $this->invoiceRepository->create($this->prepareInvoiceData($order));
+
+                $orderData = request()->input('orderData');
+
+                if (isset($orderData['orderID'])) {
+                    $transactionDetails = $this->smartButton->getOrder($orderData['orderID']);
+
+                    $transactionDetails = json_decode(json_encode($transactionDetails), true);
+
+                    $this->orderTransactionRepository->create([
+                        'transaction_id' => $transactionDetails['id'],
+                        'status' => $transactionDetails['status'],
+                        'type' => $transactionDetails['intent'],
+                        'amount' => $transactionDetails['purchase_units'][0]['amount']['value'],
+                        'payment_method' => $order->payment->method,
+                        'order_id' => $order->id,
+                        'invoice_id' => $invoice->id,
+                        'data' => json_encode([
+                            'purchase_units' => $transactionDetails['purchase_units'],
+                            'payer' => $transactionDetails['payer'],
+                        ]),
+                    ]);
+                }
+            }
+
+            Cart::deActivateCart();
+
+            session()->flash('order_id', $order->id);
+
+            return response()->json([
+                'success' => true,
+            ]);
+        } catch (\Exception $e) {
+            session()->flash('error', trans('shop::app.common.error'));
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Whether the approved PayPal order is for this cart, checked before anything is
+     * captured so a mismatch costs the shopper nothing.
+     */
+    protected function approvalCoversCart($cart): bool
+    {
+        $orderId = request()->input('orderData.orderID');
+
+        if (
+            ! $cart
+            || ! $orderId
+        ) {
+            return false;
+        }
+
+        $order = json_decode(json_encode($this->smartButton->getOrder($orderId)), true);
+
+        if (
+            ($order['status'] ?? null) !== self::APPROVED_STATUS
+            || count($order['purchase_units'] ?? []) !== 1
+        ) {
+            return false;
+        }
+
+        return $this->amountMatchesCart($order['purchase_units'][0]['amount'] ?? null, $cart);
+    }
+
+    /**
+     * Whether PayPal captured what this cart comes to, so a capture approved against a
+     * cheaper cart cannot pay for a dearer one.
+     */
+    protected function captureCoversCart($cart): bool
+    {
+        if (! $orderId = request()->input('orderData.orderID')) {
+            return false;
+        }
+
+        $details = json_decode(json_encode($this->smartButton->getOrder($orderId)), true);
+
+        $captured = $details['purchase_units'][0]['payments']['captures'][0]['amount'] ?? null;
+
+        return $this->amountMatchesCart($captured, $cart);
+    }
+
+    /**
+     * Whether a PayPal amount block is this cart's total in this cart's currency.
+     */
+    protected function amountMatchesCart(?array $amount, $cart): bool
+    {
+        if (! isset($amount['value'], $amount['currency_code'])) {
+            return false;
+        }
+
+        return $this->smartButton->formatCurrencyValue((float) $amount['value'])
+                === $this->smartButton->formatCurrencyValue($this->payableTotal($cart))
+            && strtoupper((string) $amount['currency_code']) === strtoupper((string) $cart->cart_currency_code);
+    }
+
+    /**
+     * Prepares order's invoice data for creation.
+     *
+     * @param  Order  $order
+     * @return array
+     */
+    protected function prepareInvoiceData($order)
+    {
+        $invoiceData = ['order_id' => $order->id];
+
+        foreach ($order->items as $item) {
+            $invoiceData['invoice']['items'][$item->id] = $item->qty_to_invoice;
+        }
+
+        return $invoiceData;
+    }
+
+    /**
+     * Validate order before creation.
+     *
+     * @return void|\Exception
+     */
+    protected function validateOrder()
+    {
+        $cart = Cart::getCart();
+
+        $minimumOrderAmount = (float) core()->getConfigData('sales.order_settings.minimum_order.minimum_order_amount') ?: 0;
+
+        if (! Cart::haveMinimumOrderAmount()) {
+            throw new \Exception(trans('shop::app.checkout.cart.minimum-order-message', ['amount' => core()->currency($minimumOrderAmount)]));
+        }
+
+        if (
+            $cart->haveStockableItems()
+            && ! $cart->shipping_address
+        ) {
+            throw new \Exception(trans('shop::app.checkout.cart.check-shipping-address'));
+        }
+
+        if (! $cart->billing_address) {
+            throw new \Exception(trans('shop::app.checkout.cart.check-billing-address'));
+        }
+
+        if (
+            $cart->haveStockableItems()
+            && ! $cart->selected_shipping_rate
+        ) {
+            throw new \Exception(trans('shop::app.checkout.cart.specify-shipping-method'));
+        }
+
+        if (! $cart->payment) {
+            throw new \Exception(trans('shop::app.checkout.cart.specify-payment-method'));
+        }
+    }
+
+    /**
+     * The body of a failed PayPal call: the gateway's own JSON, a generic message for a database
+     * or runtime error whose text is logged rather than shown, or one of our own sentences.
+     */
+    protected function errorResponse(\Exception $e): JsonResponse
+    {
+        $decoded = json_decode($e->getMessage(), true);
+
+        if (is_array($decoded)) {
+            return response()->json($decoded, 400);
+        }
+
+        if (
+            $e instanceof QueryException
+            || $e instanceof \ErrorException
+        ) {
+            report($e);
+
+            return response()->json([
+                'message' => trans('paypal::app.errors.something-went-wrong'),
+            ], 400);
+        }
+
+        return response()->json(['message' => $e->getMessage()], 400);
+    }
+
+    /**
+     * The response that sends the shopper back to the cart page.
+     */
+    protected function redirectToCart(): JsonResponse
+    {
+        return response()->json([
+            'redirect_url' => route('shop.checkout.cart.index'),
+        ], 403);
+    }
+}

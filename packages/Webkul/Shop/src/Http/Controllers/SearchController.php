@@ -1,0 +1,107 @@
+<?php
+
+namespace Webkul\Shop\Http\Controllers;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\View\View;
+use Webkul\MagicAI\Facades\MagicAI;
+use Webkul\Marketing\Repositories\SearchTermRepository;
+use Webkul\Product\Enums\SearchContextEnum;
+use Webkul\Product\Repositories\SearchRepository;
+
+class SearchController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected SearchTermRepository $searchTermRepository,
+        protected SearchRepository $searchRepository
+    ) {}
+
+    /**
+     * Index to handle the view loaded with the search results.
+     *
+     * @return View
+     */
+    public function index()
+    {
+        $this->validate(request(), [
+            'query' => ['sometimes', 'bail', 'required', 'string', 'regex:/^[^\\\\]+$/u'],
+        ]);
+
+        $query = request()->query('query');
+
+        if (is_string($query)) {
+            $searchTerm = $this->searchTermRepository->findOneWhere([
+                'term' => $query,
+                'channel_id' => core()->getCurrentChannel()->id,
+                'locale' => app()->getLocale(),
+            ]);
+
+            if ($searchTerm?->redirect_url) {
+                return redirect()->to($searchTerm->redirect_url);
+            }
+        }
+
+        $suggestion = null;
+
+        if (
+            ! request()->has('suggest')
+            || request()->query('suggest') !== '0'
+        ) {
+            $suggestion = $this->searchRepository
+                ->setSearchContext(SearchContextEnum::STOREFRONT)
+                ->getSuggestions($query);
+        }
+
+        return view('shop::search.index', [
+            'query' => $query,
+            'suggestion' => $suggestion,
+            'params' => [
+                'sort' => request()->query('sort'),
+                'limit' => request()->query('limit'),
+                'mode' => request()->query('mode'),
+            ],
+        ]);
+    }
+
+    /**
+     * Upload image and analyze it for product search keywords. An SVG is left to the browser's
+     * classifier, because the AI providers read raster images only and would receive it unsanitized.
+     */
+    public function upload(): JsonResponse
+    {
+        request()->validate([
+            'image' => 'required|image:allow_svg|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+        ]);
+
+        $imageUrl = $this->searchRepository->uploadSearchImage(request()->all());
+
+        $keywords = '';
+
+        $useAi = core()->getConfigData('magic_ai.general.settings.enabled')
+            && core()->getConfigData('magic_ai.storefront_features.image_search.enabled')
+            && request()->file('image')->guessExtension() !== 'svg';
+
+        if ($useAi) {
+            try {
+                $keywords = MagicAI::analyzeImage(
+                    request()->file('image')->getRealPath()
+                );
+            } catch (\Exception $e) {
+                report($e);
+
+                $useAi = false;
+            }
+        }
+
+        return response()->json([
+            'image_url' => $imageUrl,
+            'keywords' => $keywords,
+            'engine' => $useAi ? 'ai' : 'tensorflow',
+        ]);
+    }
+}

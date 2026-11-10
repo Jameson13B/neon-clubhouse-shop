@@ -1,0 +1,613 @@
+@props([
+    'width'  => '200px',
+    'height' => '200px'
+])
+
+<v-media
+    {{ $attributes }}
+    width="{{ $width }}"
+    height="{{ $height }}"
+>
+    <x-shop::media.images.lazy
+        class="mb-4 h-50 w-50 rounded-xl max-sm:h-25 max-sm:w-25"
+    />
+</v-media>
+
+@pushOnce('scripts')
+    <script
+        type="text/x-template"
+        id="v-media-template"
+    >
+        <div class="mb-4 flex cursor-pointer flex-col rounded-lg">
+            <div :class="{'border border-dashed border-gray-300 rounded-2xl': isDragOver }">
+                <div
+                    class="flex h-50 w-50 cursor-pointer flex-col items-center justify-center rounded-xl bg-zinc-100 hover:bg-gray-100 max-md:h-36 max-md:w-36 max-sm:h-25 max-sm:w-25"
+                    v-if="uploadedFiles.isPicked"
+                >
+                    <div 
+                        class="group relative flex h-50 w-50 max-md:h-36 max-md:w-36 max-sm:h-25 max-sm:w-25"
+                        @mouseenter="uploadedFiles.showDeleteButton = true"
+                        @mouseleave="uploadedFiles.showDeleteButton = false"
+                    >
+                        <img
+                            class="rounded-xl object-cover max-md:rounded-full"
+                            :src="uploadedFiles.url"
+                            :class="{ 'opacity-25' : uploadedFiles.showDeleteButton }"
+                            alt="Uploaded Image"
+                        >
+
+                        <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 transform opacity-0 transition-opacity group-hover:opacity-100">
+                            <span 
+                                class="icon-bin cursor-pointer text-2xl text-black"
+                                @click="remove"
+                            >
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <label 
+                    :for="`${$.uid}_fileInput`"
+                    class="flex h-50 w-50 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl bg-zinc-100 hover:bg-gray-100 max-md:h-36 max-md:w-36 max-sm:h-25 max-sm:w-25 max-sm:gap-1"
+                    :style="{'max-width': this.width, 'max-height': this.height}"
+                    v-show="! uploadedFiles.isPicked"
+                    @dragover="onDragOver"
+                    @dragleave="onDragLeave"
+                    @drop="onDrop"
+                >
+                    <label 
+                        :for="`${$.uid}_fileInput`"
+                        class="icon-camera text-3xl max-sm:text-lg"
+                    >
+                    </label>
+
+                    <p class="font-medium max-md:hidden max-sm:text-xs">
+                        @lang("shop::app.components.media.index.add-image")
+                    </p>
+
+                    <input
+                        type="hidden"
+                        :name="name"
+                        v-if="! hasPickedFiles"
+                    />
+
+                    <v-field
+                        type="file"
+                        class="hidden"
+                        :id="`${$.uid}_fileInput`"
+                        :name="name"
+                        :accept="acceptedTypes"
+                        :rules="appliedRules"
+                        :multiple="isMultiple"
+                        @change="onFileChange"
+                    >
+                    </v-field>
+                </label>
+            </div>
+
+            <div
+                class="flex items-center"
+                v-if="isMultiple"
+            >
+                <ul class="justify-left mt-2 flex flex-wrap gap-2.5">
+                    <li
+                        v-for="(file, index) in uploadedFiles"
+                        :key="index"
+                    >
+                        <template v-if="isImage(file)">
+                            <div
+                                class="group relative flex h-12 w-12 justify-center max-sm:h-15 max-sm:w-15"
+                                @mouseenter="file.showDeleteButton = true"
+                                @mouseleave="file.showDeleteButton = false"
+                            >
+                                <img
+                                    :src="file.url"
+                                    :alt="file.name"
+                                    class="max-h-12 min-w-12 rounded-xl max-sm:max-h-15 max-sm:min-w-15"
+                                    :class="{ 'opacity-25' : file.showDeleteButton }"
+                                >
+                                <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 transform opacity-0 transition-opacity group-hover:opacity-100">
+                                    <span
+                                        class="icon-bin cursor-pointer text-2xl text-black"
+                                        @click="remove(index)"
+                                    >
+                                    </span>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template v-else>
+                            <div
+                                class="group relative flex h-12 w-12 justify-center max-sm:h-15 max-sm:w-15"
+                                @mouseenter="file.showDeleteButton = true"
+                                @mouseleave="file.showDeleteButton = false"
+                            >
+                                <video
+                                    :src="file.url"
+                                    :alt="file.name"
+                                    class="max-h-12 min-w-12 rounded-xl max-sm:max-h-15 max-sm:min-w-15"
+                                    :class="{'opacity-25' : file.showDeleteButton}"
+                                >
+                                </video>
+                                <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 transform opacity-0 transition-opacity group-hover:opacity-100">
+                                    <span 
+                                        class="icon-bin cursor-pointer text-2xl text-black"
+                                        @click="remove(index)"
+                                    >
+                                    </span>
+                                </div>
+                            </div>
+                        </template>
+                    </li>
+                </ul>
+            </div>
+
+            <p
+                class="text-red-500 text-xs italic"
+                data-field-error
+                v-if="fieldError"
+                v-text="fieldError"
+            >
+            </p>
+        </div>
+    </script>
+
+    <script type="module">
+        app.component("v-media", {
+            template: '#v-media-template',
+
+            props: {
+                name: {
+                    type: String, 
+                    default: 'attachments',
+                },
+
+                isMultiple: {
+                    type: Boolean,
+                    default: false,
+                },
+
+                rules: {
+                    type: String,
+                },
+
+                acceptedTypes: {
+                    type: String,
+                    default: 'image/*, video/*,'
+                },
+
+                maxSize: {
+                    type: [Number, String],
+                    default: 0,
+                },
+
+                label: {
+                    type: String, 
+                    default: '@lang("shop::app.components.media.index.add-attachments")'
+                },
+
+                src: {
+                    type: String,
+                    default: ''
+                },
+
+                height: {
+                    type: String,
+                    default: '200px',
+                },
+
+                width: {
+                    type: String,
+                    default: '200px',
+                },
+
+                errors: {
+                    type: Object,
+                    default: () => ({}),
+                },
+
+                setFieldError: {
+                    type: Function,
+                },
+            },
+
+            data() {
+                return {
+                    uploadedFiles: [],
+
+                    isDragOver: false,
+
+                    appliedRules: '',
+
+                    clientError: '',
+                };
+            },
+
+            computed: {
+                /**
+                 * The keys of the form's errors that belong to one of this field's files.
+                 */
+                errorKeys() {
+                    const toPath = key => key.replace(/\[\]$/, '').replace(/\[(.*?)\]/g, '.$1');
+
+                    const field = toPath(this.name) + '.';
+
+                    return Object.keys(this.errors).filter(key => toPath(key).startsWith(field));
+                },
+
+                /**
+                 * The first error the form holds for one of this field's files.
+                 */
+                errorMessage() {
+                    return this.errors[this.errorKeys[0]];
+                },
+
+                /**
+                 * The error shown under the field, the server's for one of its files before the one found on picking.
+                 */
+                fieldError() {
+                    return this.errorMessage ?? this.clientError;
+                },
+
+                /**
+                 * Whether a file is picked, in which case the empty field must go, because
+                 * a value posted under the same key hides the file from validation.
+                 */
+                hasPickedFiles() {
+                    return this.isMultiple
+                        ? this.uploadedFiles.length > 0
+                        : this.uploadedFiles.isPicked;
+                },
+
+                /**
+                 * The extensions the field accepts, written for display from its accepted types.
+                 */
+                acceptedExtensions() {
+                    const subtypeExtensions = {
+                        'svg+xml': 'svg',
+                        'quicktime': 'mov',
+                        'x-icon': 'ico',
+                        'vnd.microsoft.icon': 'ico',
+                    };
+
+                    const types = (this.acceptedTypes || '')
+                        .split(',')
+                        .map(type => type.trim().toLowerCase())
+                        .filter(Boolean);
+
+                    const extensions = types
+                        .filter(type => ! type.endsWith('*'))
+                        .map(type => {
+                            if (! type.includes('/')) {
+                                return type.replace(/^\.?/, '.');
+                            }
+
+                            const subtype = type.split('/').pop();
+
+                            return '.' + (subtypeExtensions[subtype] ?? subtype);
+                        });
+
+                    const labels = extensions.length
+                        ? extensions
+                        : types.map(type => type.split('/').shift()).filter(type => type !== '*');
+
+                    return [...new Set(labels)].join(', ');
+                },
+            },
+
+            watch: {
+                fieldError: {
+                    immediate: true,
+
+                    handler(message) {
+                        if (message) {
+                            this.focusError();
+                        }
+                    },
+                },
+            },
+
+            created() {
+                this.appliedRules = this.rules;
+
+                if (this.src != '') {
+                    this.appliedRules = '';
+
+                    this.uploadedFiles = {
+                        isPicked: true,
+                        url: this.src,
+                    }
+                }
+            },
+
+            methods: {
+                /**
+                 * Add the picked files to the field, leaving out any of a type or size it does not accept.
+                 */
+                onFileChange(event) {
+                    let files = event.target.files;
+                    let hasInvalid = false;
+                    let hasOversize = false;
+
+                    this.clearErrors();
+
+                    for (let i = 0; i < files.length; i++) {
+                        let file = files[i];
+
+                        if (! this.isAcceptedType(file)) {
+                            hasInvalid = true;
+
+                            continue;
+                        }
+
+                        if (this.exceedsMaxSize(file)) {
+                            hasOversize = true;
+
+                            continue;
+                        }
+
+                        let reader = new FileReader();
+
+                        reader.onload = () => {
+                            if (! this.isMultiple) {
+                                this.uploadedFiles = {
+                                    isPicked: true,
+                                    name: file.name,
+                                    url: reader.result,
+                                }
+
+                                return;
+                            }
+
+                            this.uploadedFiles.push({
+                                name: file.name,
+                                url: reader.result,
+                                file: new File([file], file.name),
+                            });
+                        };
+
+                        reader.readAsDataURL(file);
+                    }
+
+                    if (hasInvalid) {
+                        this.notifyInvalidType();
+                    }
+
+                    if (hasOversize) {
+                        this.notifySizeLimit();
+                    }
+
+                    if (
+                        hasInvalid
+                        || hasOversize
+                    ) {
+                        event.target.value = '';
+                    }
+                },
+
+                /**
+                 * Add the dropped files to the field, leaving out any of a type or size it does not accept.
+                 */
+                handleDroppedFiles(files) {
+                    let hasInvalid = false;
+                    let hasOversize = false;
+
+                    this.clearErrors();
+
+                    for (let i = 0; i < files.length; i++) {
+                        let file = files[i];
+
+                        if (! this.isAcceptedType(file)) {
+                            hasInvalid = true;
+
+                            continue;
+                        }
+
+                        if (this.exceedsMaxSize(file)) {
+                            hasOversize = true;
+
+                            continue;
+                        }
+
+                        let reader = new FileReader();
+
+                        reader.onload = () => {
+                            if (! this.isMultiple) {
+                                this.uploadedFiles = {
+                                    isPicked: true,
+                                    name: file.name,
+                                    url: reader.result,
+                                }
+
+                                return;
+                            }
+
+                            this.uploadedFiles.push({
+                                name: file.name,
+                                url: reader.result,
+                            });
+                        };
+
+                        reader.readAsDataURL(file);
+                    }
+
+                    if (hasInvalid) {
+                        this.notifyInvalidType();
+                    }
+
+                    if (hasOversize) {
+                        this.notifySizeLimit();
+                    }
+                },
+
+                /**
+                 * Whether the file is larger than the field, or PHP, accepts.
+                 */
+                exceedsMaxSize(file) {
+                    const limit = this.sizeLimitKilobytes();
+
+                    return limit > 0
+                        && file.size > limit * 1024;
+                },
+
+                /**
+                 * The largest file the field takes in kilobytes, the lower of its own limit and PHP's.
+                 */
+                sizeLimitKilobytes() {
+                    const limits = [{{ core()->getMaxUploadSize() }}, Number(this.maxSize) || 0].filter(limit => limit > 0);
+
+                    return limits.length ? Math.min(...limits) : 0;
+                },
+
+                /**
+                 * The size limit written for the shopper, in megabytes from one megabyte up.
+                 */
+                formattedSizeLimit() {
+                    const kilobytes = this.sizeLimitKilobytes();
+
+                    return kilobytes >= 1024
+                        ? (Math.round((kilobytes / 1024) * 10) / 10) + ' MB'
+                        : kilobytes + ' KB';
+                },
+
+                /**
+                 * Whether the field accepts a file of this type.
+                 */
+                isAcceptedType(file) {
+                    const types = (this.acceptedTypes || '')
+                        .split(',')
+                        .map(type => type.trim().toLowerCase())
+                        .filter(Boolean);
+
+                    if (
+                        ! types.length
+                        || types.includes('*')
+                        || types.includes('*/*')
+                    ) {
+                        return true;
+                    }
+
+                    const mime = (file.type || '').toLowerCase();
+
+                    const extension = (file.name || '').split('.').pop().toLowerCase();
+
+                    return types.some(type => {
+                        if (type.endsWith('/*')) {
+                            return mime.startsWith(type.slice(0, -1));
+                        }
+
+                        if (type.includes('/')) {
+                            return mime === type;
+                        }
+
+                        return (type.startsWith('.') ? type.slice(1) : type) === extension;
+                    });
+                },
+
+                /**
+                 * Tell the shopper a file was left out for its type.
+                 */
+                notifyInvalidType() {
+                    this.clientError = "@lang('shop::app.components.media.index.invalid-file-type')".replace(':types', this.acceptedExtensions);
+                },
+
+                /**
+                 * Tell the shopper a file was left out for its size.
+                 */
+                notifySizeLimit() {
+                    this.clientError = "@lang('shop::app.components.media.index.size-limit-error')".replace(':size', this.formattedSizeLimit());
+                },
+
+                /**
+                 * Whether the file is an image, going by its name.
+                 */
+                isImage(file) {
+                    if (! file.name) {
+                        return;
+                    }
+
+                    return file.name.match(/\.(jpg|jpeg|png|gif)$/i);
+                },
+
+                /**
+                 * Mark the field as having files dragged over it.
+                 */
+                onDragOver(event) {
+                    event.preventDefault();
+
+                    this.isDragOver = true;
+                },
+
+                /**
+                 * Clear the mark once the files are dragged away.
+                 */
+                onDragLeave(event) {
+                    event.preventDefault();
+
+                    this.isDragOver = false;
+                },
+                
+                /**
+                 * Take in the files dropped on the field.
+                 */
+                onDrop(event) {
+                    event.preventDefault();
+
+                    this.isDragOver = false;
+
+                    let files = event.dataTransfer.files;
+
+                    this.handleDroppedFiles(files);
+                },
+
+                /**
+                 * Remove a file from the field.
+                 */
+                remove(index) {
+                    this.clearErrors();
+
+                    if (! this.isMultiple) {
+                        this.uploadedFiles = [];
+
+                        this.appliedRules = this.rules;
+                        
+                        return;
+                    }
+
+                    this.uploadedFiles.splice(index, 1);
+                },
+
+                /**
+                 * Forget the errors of this field's files, which the form otherwise keeps until the page reloads.
+                 */
+                clearErrors() {
+                    this.clientError = '';
+
+                    this.errorKeys.forEach(key => this.setFieldError?.(key, undefined));
+                },
+
+                /**
+                 * Bring this field's error into view, but only when no field before it holds one.
+                 */
+                focusError() {
+                    this.$nextTick(() => {
+                        const errorElement = this.$el?.querySelector?.('[data-field-error]');
+
+                        if (! errorElement) {
+                            return;
+                        }
+
+                        if (document.querySelector('[data-field-error]') !== errorElement) {
+                            return;
+                        }
+
+                        errorElement.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'center',
+                        });
+                    });
+                },
+            },
+        });
+    </script>
+@endpushOnce

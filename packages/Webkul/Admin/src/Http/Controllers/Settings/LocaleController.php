@@ -1,0 +1,129 @@
+<?php
+
+namespace Webkul\Admin\Http\Controllers\Settings;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Event;
+use Illuminate\View\View;
+use Webkul\Admin\DataGrids\Settings\LocalesDataGrid;
+use Webkul\Admin\Http\Controllers\Controller;
+use Webkul\Core\Repositories\LocaleRepository;
+use Webkul\Core\Rules\Code;
+
+class LocaleController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(protected LocaleRepository $localeRepository) {}
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return View
+     */
+    public function index()
+    {
+        if (request()->ajax()) {
+            return datagrid(LocalesDataGrid::class)->process();
+        }
+
+        return view('admin::settings.locales.index');
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(): JsonResponse
+    {
+        $this->validate(request(), [
+            'code' => ['required', 'max:255', 'unique:locales,code', new Code],
+            'name' => 'required|max:255',
+            'direction' => 'required|in:ltr,rtl',
+            'logo_path' => 'array',
+            'logo_path.*' => 'image:allow_svg|extensions:jpeg,jpg,png,svg,webp',
+        ], [], ['logo_path.*' => trans('admin::app.settings.locales.index.create.locale-logo')]);
+
+        Event::dispatch('core.locale.create.before');
+
+        $locale = $this->localeRepository->create(request()->only([
+            'code',
+            'name',
+            'direction',
+            'logo_path',
+        ]));
+
+        Event::dispatch('core.locale.create.after', $locale);
+
+        return new JsonResponse([
+            'message' => trans('admin::app.settings.locales.index.create-success'),
+        ]);
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(int $id): JsonResponse
+    {
+        $locale = $this->localeRepository->findOrFail($id);
+
+        return new JsonResponse([
+            'data' => $locale,
+        ]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(): JsonResponse
+    {
+        $this->validate(request(), [
+            'name' => 'required|max:255',
+            'direction' => 'required|in:ltr,rtl',
+            'logo_path' => 'array',
+            'logo_path.*' => 'image:allow_svg|extensions:jpeg,jpg,png,svg,webp',
+        ], [], ['logo_path.*' => trans('admin::app.settings.locales.index.create.locale-logo')]);
+
+        Event::dispatch('core.locale.update.before', request()->id);
+
+        $locale = $this->localeRepository->update(request()->only([
+            'name',
+            'direction',
+            'logo_path',
+        ]), request()->id);
+
+        Event::dispatch('core.locale.update.after', $locale);
+
+        return new JsonResponse([
+            'message' => trans('admin::app.settings.locales.index.update-success'),
+        ]);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(int $id): JsonResponse
+    {
+        $this->localeRepository->findOrFail($id);
+
+        if ($this->localeRepository->count() == 1) {
+            return response()->json([
+                'message' => trans('admin::app.settings.locales.index.last-delete-error'),
+            ], 400);
+        }
+
+        try {
+            $this->localeRepository->delete($id);
+
+            return new JsonResponse([
+                'message' => trans('admin::app.settings.locales.index.delete-success'),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => trans('admin::app.settings.locales.index.delete-failed'),
+            ], 500);
+        }
+    }
+}

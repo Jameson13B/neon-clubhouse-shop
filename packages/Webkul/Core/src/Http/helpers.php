@@ -1,0 +1,171 @@
+<?php
+
+use Illuminate\Http\Request;
+use Stevebauman\Purify\Facades\Purify;
+use Webkul\Core\Contracts\DatabaseGrammar;
+use Webkul\Core\Facades\Acl;
+use Webkul\Core\Facades\Core;
+use Webkul\Core\Facades\DbGrammar;
+use Webkul\Core\Facades\Menu;
+use Webkul\Core\Facades\SystemConfig;
+
+if (! function_exists('core')) {
+    /**
+     * Core helper.
+     *
+     * @return Webkul\Core\Core
+     */
+    function core()
+    {
+        return Core::getFacadeRoot();
+    }
+}
+
+if (! function_exists('menu')) {
+    /**
+     * Menu helper.
+     *
+     * @return Webkul\Core\Menu
+     */
+    function menu()
+    {
+        return Menu::getFacadeRoot();
+    }
+}
+
+if (! function_exists('acl')) {
+    /**
+     * Acl helper.
+     *
+     * @return Webkul\Core\Acl
+     */
+    function acl()
+    {
+        return Acl::getFacadeRoot();
+    }
+}
+
+if (! function_exists('system_config')) {
+    /**
+     * System Config helper.
+     *
+     * @return Webkul\Core\SystemConfig
+     */
+    function system_config()
+    {
+        return SystemConfig::getFacadeRoot();
+    }
+}
+
+if (! function_exists('db_grammar')) {
+    /**
+     * Database grammar helper.
+     *
+     * @return DatabaseGrammar
+     */
+    function db_grammar()
+    {
+        return DbGrammar::getFacadeRoot();
+    }
+}
+
+if (! function_exists('is_admin_request')) {
+    /**
+     * Whether a request is for the admin panel, read from the leading segment of its path, so a storefront
+     * url that merely contains the admin segment, such as a cached image's, is not taken for one.
+     */
+    function is_admin_request(?Request $request = null): bool
+    {
+        $adminUrl = trim((string) config('app.admin_url'), '/');
+
+        if ($adminUrl === '') {
+            return false;
+        }
+
+        return ($request ?? request())->is($adminUrl, $adminUrl.'/*');
+    }
+}
+
+if (! function_exists('clean_path')) {
+    /**
+     * Clean path.
+     */
+    function clean_path(string $path): string
+    {
+        return collect(explode('/', $path))
+            ->filter(fn ($segment) => ! empty($segment))
+            ->join('/');
+    }
+}
+
+if (! function_exists('clean_content')) {
+    /**
+     * Clean content.
+     */
+    function clean_content(string $content): string
+    {
+        $cleaned = Purify::clean($content);
+
+        $patterns = [
+            '/\{\{.*?\}\}/',
+            '/\{!!.*?!!\}/',
+            '/@(php|if|else|endif|foreach|endforeach|for|endfor|while|endwhile|switch|endswitch|case|break|continue|include|extends|section|endsection|yield|push|endpush|stack|endstack)/',
+            '/<\?php.*?\?>/s',
+        ];
+
+        foreach ($patterns as $pattern) {
+            $cleaned = preg_replace($pattern, '', $cleaned);
+        }
+
+        $cleaned = str_replace(
+            ['{{', '}}', '{!!', '!!}'],
+            ['&#123;&#123;', '&#125;&#125;', '&#123;!!', '!!&#125;'],
+            $cleaned
+        );
+
+        return $cleaned;
+    }
+}
+
+if (! function_exists('array_permutation')) {
+    /**
+     * Every combination of one value from each of the given arrays.
+     *
+     * @return array<int, array>
+     */
+    function array_permutation($input)
+    {
+        $results = [];
+
+        foreach ($input as $key => $values) {
+            if (empty($values)) {
+                continue;
+            }
+
+            if (empty($results)) {
+                foreach ($values as $value) {
+                    $results[] = [$key => $value];
+                }
+            } else {
+                $append = [];
+
+                foreach ($results as &$result) {
+                    $result[$key] = array_shift($values);
+
+                    $copy = $result;
+
+                    foreach ($values as $item) {
+                        $copy[$key] = $item;
+                        $append[] = $copy;
+                    }
+
+                    array_unshift($values, $result[$key]);
+                }
+
+                $results = array_merge($results, $append);
+            }
+        }
+
+        return $results;
+    }
+}

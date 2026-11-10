@@ -1,0 +1,300 @@
+<?php
+
+namespace Webkul\Core\SystemConfig;
+
+use Illuminate\Support\Str;
+
+class ItemField
+{
+    /**
+     * Rules Laravel applies on its own, which Vee Validate has no validator for.
+     */
+    const SERVER_ONLY_RULES = [
+        'nullable',
+        'sometimes',
+        'present',
+        'filled',
+        'bail',
+        'gte',
+        'lte',
+    ];
+
+    /**
+     * Laravel to Vee Validation mappings.
+     *
+     * @var array
+     */
+    protected $veeValidateMappings = [
+        'max' => [
+            'text' => 'max',
+            'number' => 'max_value',
+        ],
+
+        'min' => [
+            'text' => 'min',
+            'number' => 'min_value',
+        ],
+
+        'numeric' => [
+            'text' => 'decimal',
+        ],
+    ];
+
+    /**
+     * Create a new ItemField instance.
+     */
+    public function __construct(
+        public string $item_key,
+        public string $name,
+        public string $title,
+        public ?string $info,
+        public string $type,
+        public ?string $path,
+        public ?string $validation,
+        public ?string $depends,
+        public ?string $default,
+        public ?bool $channel_based,
+        public ?bool $locale_based,
+        public ?string $placeholder,
+        public array|string $options,
+        public bool $is_visible = true,
+    ) {
+        $this->options = $this->getOptions();
+    }
+
+    /**
+     * Get name of config item.
+     */
+    public function getName(): ?string
+    {
+        return $this->name;
+    }
+
+    /**
+     * Get info of config item.
+     */
+    public function getInfo(): ?string
+    {
+        return $this->info ?? '';
+    }
+
+    /**
+     * Get title of config item.
+     */
+    public function getTitle(): ?string
+    {
+        return $this->title ?? '';
+    }
+
+    /**
+     * Get type of config item.
+     */
+    public function getType(): string
+    {
+        return $this->type;
+    }
+
+    /**
+     * Get path of config item.
+     */
+    public function getPath(): ?string
+    {
+        return $this->path;
+    }
+
+    /**
+     * Get item key of config item.
+     */
+    public function getItemKey(): string
+    {
+        return $this->item_key;
+    }
+
+    /**
+     * Get validation of config item.
+     *
+     * These rules are read by Vee Validate in the browser, so the ones Laravel alone understands
+     * are dropped rather than passed on for it to refuse.
+     */
+    public function getValidations(): ?string
+    {
+        if (empty($this->validation)) {
+            return '';
+        }
+
+        $rules = collect(explode('|', $this->validation))
+            ->reject(fn ($rule) => in_array(Str::before($rule, ':'), self::SERVER_ONLY_RULES))
+            ->map(fn ($rule) => $this->toVeeValidateRule($rule))
+            ->filter()
+            ->all();
+
+        return implode('|', $rules);
+    }
+
+    /**
+     * Get depends of config item.
+     */
+    public function getDepends(): ?string
+    {
+        return $this->depends;
+    }
+
+    /**
+     * Get default value of config item.
+     */
+    public function getDefault(): ?string
+    {
+        return $this->default;
+    }
+
+    /**
+     * Get channel based of config item.
+     */
+    public function getChannelBased(): ?bool
+    {
+        return $this->channel_based;
+    }
+
+    /**
+     * Get locale based of config item.
+     */
+    public function getLocaleBased(): ?bool
+    {
+        return $this->locale_based;
+    }
+
+    /**
+     * Get name field for forms in configuration page.
+     */
+    public function getNameKey(): string
+    {
+        return $this->item_key.'.'.$this->name;
+    }
+
+    /**
+     * Check if the field is required.
+     */
+    public function isRequired(): string
+    {
+        return Str::contains($this->getValidations(), 'required') ? 'required' : '';
+    }
+
+    /**
+     * Get placeholder of config item.
+     */
+    public function getPlaceholder(): ?string
+    {
+        return $this->placeholder;
+    }
+
+    /**
+     * Get options of config item.
+     */
+    public function getOptions(): array
+    {
+        if (is_array($this->options)) {
+            return collect($this->options)->map(fn ($option) => [
+                'title' => trans($option['title']),
+                'value' => $option['value'],
+            ])->toArray();
+        }
+
+        return collect($this->getFieldOptions($this->options))->map(fn ($option) => [
+            'title' => trans($option['title']),
+            'value' => $option['value'],
+        ])->toArray();
+    }
+
+    /**
+     * Convert the field to an array.
+     */
+    public function toArray()
+    {
+        return [
+            'name' => $this->getName(),
+            'title' => $this->getTitle(),
+            'info' => $this->getInfo(),
+            'type' => $this->getType(),
+            'path' => $this->getPath(),
+            'depends' => $this->getDepends(),
+            'validation' => $this->getValidations(),
+            'default' => $this->getDefault(),
+            'channel_based' => $this->getChannelBased(),
+            'locale_based' => $this->getLocaleBased(),
+            'placeholder' => $this->getPlaceholder(),
+            'options' => $this->getOptions(),
+            'item_key' => $this->getItemKey(),
+        ];
+    }
+
+    /**
+     * Get name field for forms in configuration page.
+     *
+     * @param  string  $key
+     * @return string
+     */
+    public function getNameField($key = null)
+    {
+        if (! $key) {
+            $key = $this->item_key.'.'.$this->name;
+        }
+
+        $nameField = '';
+
+        foreach (explode('.', $key) as $key => $field) {
+            $nameField .= $key === 0 ? $field : '['.$field.']';
+        }
+
+        return $nameField;
+    }
+
+    /**
+     * Get depend the field name.
+     */
+    public function getDependFieldName(): string
+    {
+        if (empty($depends = $this->getDepends())) {
+            return '';
+        }
+
+        $dependNameKey = $this->getItemKey().'.'.collect(explode(':', $depends))->first();
+
+        return $this->getNameField($dependNameKey);
+    }
+
+    /**
+     * Get the values of the depend field that make this one visible.
+     */
+    public function getDependFieldValue(): string
+    {
+        if (empty($depends = $this->getDepends())) {
+            return '';
+        }
+
+        return (string) collect(explode(':', $depends))->last();
+    }
+
+    /**
+     * A single rule under the name Vee Validate knows it by.
+     */
+    protected function toVeeValidateRule(string $rule): string
+    {
+        $name = Str::before($rule, ':');
+
+        if (! array_key_exists($this->getType(), $this->veeValidateMappings[$name] ?? [])) {
+            return $rule;
+        }
+
+        return Str::replaceFirst($name, $this->veeValidateMappings[$name][$this->getType()], $rule);
+    }
+
+    /**
+     * Returns the select options for the field.
+     */
+    protected function getFieldOptions(string $options): array
+    {
+        [$class, $method] = Str::parseCallback($options);
+
+        return app($class)->$method();
+    }
+}

@@ -1,0 +1,500 @@
+<?php
+
+namespace Webkul\Product\Helpers\Indexers;
+
+use Elastic\Elasticsearch\Exception\ClientResponseException;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
+use Webkul\Attribute\Contracts\Attribute;
+use Webkul\Attribute\Enums\AttributeTypeEnum;
+use Webkul\Attribute\Repositories\AttributeRepository;
+use Webkul\Category\Repositories\CategoryRepository;
+use Webkul\Core\Contracts\Channel;
+use Webkul\Core\Contracts\Locale;
+use Webkul\Core\Facades\ElasticSearch as ElasticSearchClient;
+use Webkul\Core\Repositories\ChannelRepository;
+use Webkul\Customer\Repositories\CustomerGroupRepository;
+use Webkul\Product\Contracts\Product;
+use Webkul\Product\Contracts\ProductAttributeValue;
+use Webkul\Product\Repositories\ProductRepository;
+use Webkul\Product\Services\Search\Engines\ElasticSearchEngine;
+
+class ElasticSearch extends AbstractIndexer
+{
+    /**
+     * How long a scroll of an index stays open between batches.
+     */
+    protected const SCROLL_TIMEOUT = '1m';
+
+    /**
+     * Batch size.
+     *
+     * @var int
+     */
+    private $batchSize;
+
+    /**
+     * Attributes.
+     *
+     * @var array
+     */
+    protected $attributes;
+
+    /**
+     * Channels.
+     *
+     * @var array
+     */
+    protected $channels;
+
+    /**
+     * Customer groups
+     *
+     * @var array
+     */
+    protected $customerGroups;
+
+    /**
+     * Product instance.
+     *
+     * @var Product
+     */
+    protected $product;
+
+    /**
+     * Channel instance.
+     *
+     * @var Channel
+     */
+    protected $channel;
+
+    /**
+     * Locale instance.
+     *
+     * @var Locale
+     */
+    protected $locale;
+
+    /**
+     * Category chains, resolved once per locale for the run.
+     *
+     * @var array<string, array<int, string>>
+     */
+    protected $categoryPaths = [];
+
+    /**
+     * Create a new indexer instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected ChannelRepository $channelRepository,
+        protected CustomerGroupRepository $customerGroupRepository,
+        protected AttributeRepository $attributeRepository,
+        protected ProductRepository $productRepository,
+        protected CategoryRepository $categoryRepository,
+    ) {
+        $this->batchSize = self::BATCH_SIZE;
+    }
+
+    /**
+     * Set current product.
+     *
+     * @param  Product  $product
+     * @return self
+     */
+    public function setProduct($product)
+    {
+        $this->product = $product;
+
+        return $this;
+    }
+
+    /**
+     * Set Channel.
+     *
+     * @param  Channel  $channel
+     * @return self
+     */
+    public function setChannel($channel)
+    {
+        $this->channel = $channel;
+
+        return $this;
+    }
+
+    /**
+     * Set Locale.
+     *
+     * @param  Locale  $locale
+     * @return self
+     */
+    public function setLocale($locale)
+    {
+        $this->locale = $locale;
+
+        return $this;
+    }
+
+    /**
+     * Reindex every products.
+     *
+     * @return void
+     */
+    public function reindexFull()
+    {
+        $this->productRepository
+            ->select('products.*')
+            ->with([
+                'channels',
+                'categories',
+                'inventories',
+                'super_attributes',
+                'variants',
+                'variants.channels',
+                'attribute_family',
+                'attribute_values',
+                'variants.attribute_family',
+                'variants.attribute_values',
+                'price_indices',
+                'variants.price_indices',
+                'inventory_indices',
+                'variants.inventory_indices',
+            ])
+            ->chunkById($this->batchSize, function ($products) {
+                $this->reindexBatch($products->all());
+            }, 'products.id', 'id');
+
+        $this->purgeOrphanedIndices();
+    }
+
+    /**
+     * Reindex products by batch size.
+     *
+     * @return void
+     */
+    public function reindexBatch($products)
+    {
+        $refreshIndices = ['body' => []];
+
+        $removeIndices = [];
+
+        foreach ($products as $product) {
+            $this->setProduct($product);
+
+            foreach ($this->getChannels() as $channel) {
+                $this->setChannel($channel);
+
+                foreach ($channel->locales as $locale) {
+                    $this->setLocale($locale);
+
+                    $indexName = $this->getIndexName();
+
+                    if (in_array($channel->id, $product->channels->pluck('id')->toArray())) {
+                        $refreshIndices['body'][] = [
+                            'index' => [
+                                '_index' => $indexName,
+                                '_id' => $product->id,
+                            ],
+                        ];
+
+                        $refreshIndices['body'][] = $this->getIndices();
+                    } else {
+                        $removeIndices[$indexName][] = $product->id;
+                    }
+                }
+            }
+        }
+
+        if (! empty($refreshIndices['body'])) {
+            ElasticSearchClient::bulk($refreshIndices);
+        }
+
+        if (! empty($removeIndices)) {
+            $this->deleteIndices($removeIndices);
+        }
+    }
+
+    /**
+     * Delete product indices.
+     *
+     * @param  array  $indices
+     * @return void
+     */
+    public function deleteIndices($indices)
+    {
+        foreach ($indices as $indexName => $productIds) {
+            foreach ($productIds as $id) {
+                $params = [
+                    'index' => $indexName,
+                    'id' => $id,
+                ];
+
+                try {
+                    ElasticSearchClient::delete($params);
+                } catch (ClientResponseException $e) {
+                }
+            }
+        }
+    }
+
+    /**
+     * Drop documents whose product is no longer in the catalog.
+     *
+     * A document is otherwise only dropped when the product it describes fires its delete event,
+     * so an index outlives a catalog that was wiped and re-seeded. The admin grid pages on the
+     * count Elasticsearch reports while reading its rows out of `product_flat`, so a document
+     * with no product behind it inflates the total and leaves a blank row in its place.
+     *
+     * @return void
+     */
+    public function purgeOrphanedIndices()
+    {
+        foreach ($this->getChannels() as $channel) {
+            $this->setChannel($channel);
+
+            foreach ($channel->locales as $locale) {
+                $this->setLocale($locale);
+
+                $this->purgeOrphanedIndex($this->getIndexName());
+            }
+        }
+    }
+
+    /**
+     * Refresh product indices.
+     *
+     * @return string
+     */
+    public function getIndexName()
+    {
+        return ElasticSearchEngine::formatIndexName($this->channel->code, $this->locale->code);
+    }
+
+    /**
+     * Get indices for the product.
+     *
+     * @return void
+     */
+    public function getIndices()
+    {
+        $properties = array_merge([
+            'id' => $this->product->id,
+            'type' => $this->product->type,
+            'sku' => $this->product->sku,
+            'attribute_family_id' => $this->product->attribute_family_id,
+            'category_ids' => $this->product->categories->pluck('id')->toArray(),
+            'category_name' => $this->getCategoryNames(),
+            'created_at' => $this->product->created_at,
+            'quantity' => $this->product->inventories->isEmpty()
+                ? null
+                : (int) $this->product->inventories->sum('qty'),
+        ], $this->product->additional ?? []);
+
+        $attributes = $this->getAttributes();
+
+        foreach ($attributes as $attribute) {
+            $attributeValue = $this->getAttributeValue($attribute);
+
+            if ($attribute->code == AttributeTypeEnum::PRICE->value) {
+                $properties[$attribute->code] = (float) $attributeValue?->{$attribute->column_name};
+
+                foreach ($this->getCustomerGroups() as $customerGroup) {
+                    if (! app()->runningInConsole()) {
+                        $this->product->load('price_indices');
+                    }
+
+                    $priceIndex = $this->product->price_indices
+                        ->where('channel_id', $this->channel->id)
+                        ->where('customer_group_id', $customerGroup->id)
+                        ->first();
+
+                    if ($priceIndex) {
+                        $groupPrice = $priceIndex?->min_price;
+                    } else {
+                        $groupPrice = $this->product->getTypeInstance()->getMinimalPrice();
+                    }
+
+                    $properties[$attribute->code.'_'.$customerGroup->id] = (float) $groupPrice;
+                }
+            } elseif ($attribute->type == AttributeTypeEnum::BOOLEAN->value) {
+                $properties[$attribute->code] = intval($attributeValue?->{$attribute->column_name} ?? $attribute->default_value);
+            } elseif (in_array($attribute->type, [
+                AttributeTypeEnum::CHECKBOX->value,
+                AttributeTypeEnum::MULTISELECT->value,
+            ])) {
+                $rawValue = $attributeValue?->{$attribute->column_name};
+
+                $properties[$attribute->code] = $rawValue ? array_map('trim', explode(',', $rawValue)) : [];
+            } else {
+                $properties[$attribute->code] = strip_tags($attributeValue?->{$attribute->column_name});
+            }
+        }
+
+        foreach ($this->product->super_attributes as $attribute) {
+            foreach ($this->product->variants as $variant) {
+                $properties['ca_'.$attribute->code][] = $variant->{$attribute->code};
+            }
+        }
+
+        return $properties;
+    }
+
+    /**
+     * The categories the product sits in, each read as the chain of ancestors leading down to it,
+     * so the index answers a search for a category by the same name the admin listing shows.
+     *
+     * @return string[]
+     */
+    public function getCategoryNames()
+    {
+        $locale = $this->locale->code;
+
+        $this->categoryPaths[$locale] ??= $this->categoryRepository->getCategoryPaths($locale);
+
+        return array_values(array_intersect_key(
+            $this->categoryPaths[$locale],
+            array_flip($this->product->categories->pluck('id')->toArray())
+        ));
+    }
+
+    /**
+     * Returns attributes to index.
+     *
+     * @return Collection
+     */
+    public function getAttributes()
+    {
+        if ($this->attributes) {
+            return $this->attributes;
+        }
+
+        $this->attributes = $this->attributeRepository
+            ->scopeQuery(function ($query) {
+                return $query->where(function ($qb) {
+                    return $qb
+                        ->orWhereIn('code', [
+                            'name',
+                            'status',
+                            'visible_individually',
+                            'new',
+                            'featured',
+                            'url_key',
+                            'short_description',
+                            'description',
+                        ])
+                        ->orWhere('is_filterable', 1);
+                });
+            })
+            ->get();
+
+        return $this->attributes;
+    }
+
+    /**
+     * Returns filterable attribute values.
+     *
+     * @param  Attribute  $attribute
+     * @param  ProductAttributeValue
+     * @return void
+     */
+    public function getAttributeValue($attribute)
+    {
+        $attributeValues = $this->product->attribute_values
+            ->where('attribute_id', $attribute->id);
+
+        if ($attribute->value_per_channel) {
+            if ($attribute->value_per_locale) {
+                $attributeValues = $attributeValues
+                    ->where('channel', $this->channel->code)
+                    ->where('locale', $this->locale->code);
+            } else {
+                $attributeValues = $attributeValues->where('channel', $this->channel->code);
+            }
+        } else {
+            if ($attribute->value_per_locale) {
+                $attributeValues = $attributeValues->where('locale', $this->locale->code);
+            } else {
+                $attributeValues = $attributeValues;
+            }
+        }
+
+        return $attributeValues->first();
+    }
+
+    /**
+     * Returns all channels.
+     *
+     * @return Collection
+     */
+    public function getChannels()
+    {
+        if ($this->channels) {
+            return $this->channels;
+        }
+
+        return $this->channels = $this->channelRepository->all();
+    }
+
+    /**
+     * Returns all customer groups.
+     *
+     * @return Collection
+     */
+    public function getCustomerGroups()
+    {
+        if ($this->customerGroups) {
+            return $this->customerGroups;
+        }
+
+        return $this->customerGroups = $this->customerGroupRepository->all();
+    }
+
+    /**
+     * Drop the documents of one index whose product is no longer in the catalog.
+     *
+     * Walked with a scroll and checked in batches, so an index far larger than the catalog costs
+     * no more memory than one batch of ids.
+     *
+     * @param  string  $indexName
+     * @return void
+     */
+    protected function purgeOrphanedIndex($indexName)
+    {
+        try {
+            $response = ElasticSearchClient::search([
+                'index' => $indexName,
+                'scroll' => self::SCROLL_TIMEOUT,
+                'body' => [
+                    'size' => $this->batchSize,
+                    'stored_fields' => [],
+                    'query' => [
+                        'match_all' => new \stdClass,
+                    ],
+                ],
+            ]);
+        } catch (ClientResponseException $e) {
+            return;
+        }
+
+        while (! empty($response['hits']['hits'])) {
+            $indexedIds = array_map('intval', array_column($response['hits']['hits'], '_id'));
+
+            $orphanedIds = array_diff(
+                $indexedIds,
+                DB::table('products')->whereIn('id', $indexedIds)->pluck('id')->all()
+            );
+
+            if (! empty($orphanedIds)) {
+                $this->deleteIndices([$indexName => $orphanedIds]);
+            }
+
+            $response = ElasticSearchClient::scroll([
+                'scroll_id' => $response['_scroll_id'],
+                'scroll' => self::SCROLL_TIMEOUT,
+            ]);
+        }
+
+        ElasticSearchClient::clearScroll(['scroll_id' => $response['_scroll_id']]);
+    }
+}

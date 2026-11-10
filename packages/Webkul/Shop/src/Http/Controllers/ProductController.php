@@ -1,0 +1,127 @@
+<?php
+
+namespace Webkul\Shop\Http\Controllers;
+
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Storage;
+use Webkul\Core\Helpers\StoredFile;
+use Webkul\Product\Repositories\ProductAttributeValueRepository;
+use Webkul\Product\Repositories\ProductDownloadableLinkRepository;
+use Webkul\Product\Repositories\ProductDownloadableSampleRepository;
+use Webkul\Product\Repositories\ProductRepository;
+use Webkul\Shop\Traits\ValidatesExternalUrl;
+
+class ProductController extends Controller
+{
+    use ValidatesExternalUrl;
+
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct(
+        protected ProductRepository $productRepository,
+        protected ProductAttributeValueRepository $productAttributeValueRepository,
+        protected ProductDownloadableSampleRepository $productDownloadableSampleRepository,
+        protected ProductDownloadableLinkRepository $productDownloadableLinkRepository
+    ) {}
+
+    /**
+     * Download image or file.
+     *
+     * @param  int  $productId
+     * @param  int  $attributeId
+     * @return Response
+     */
+    public function download($productId, $attributeId)
+    {
+        if (! $this->isVisibleProduct($productId)) {
+            abort(404);
+        }
+
+        $productAttribute = $this->productAttributeValueRepository->findOneWhere([
+            'product_id' => $productId,
+            'attribute_id' => $attributeId,
+        ]);
+
+        return isset($productAttribute['text_value'])
+            ? Storage::download($productAttribute['text_value'])
+            : null;
+    }
+
+    /**
+     * Download the for the specified resource.
+     *
+     * @return Response|\Exception
+     */
+    public function downloadSample()
+    {
+        try {
+            if (request('type') == 'link') {
+                $productDownloadableLink = $this->productDownloadableLinkRepository->findOrFail(request('id'));
+
+                if (! $this->isVisibleProduct($productDownloadableLink->product_id)) {
+                    abort(404);
+                }
+
+                if ($productDownloadableLink->sample_type == 'file') {
+                    $privateDisk = Storage::disk('private');
+
+                    return $privateDisk->exists($productDownloadableLink->sample_file)
+                        ? $privateDisk->download($productDownloadableLink->sample_file)
+                        : abort(404);
+                } else {
+                    if (! $this->validateExternalUrl($productDownloadableLink->sample_url)) {
+                        abort(404);
+                    }
+
+                    $fileName = substr($productDownloadableLink->sample_url, strrpos($productDownloadableLink->sample_url, '/') + 1);
+
+                    $tempImage = tempnam(sys_get_temp_dir(), $fileName);
+
+                    copy($productDownloadableLink->sample_url, $tempImage);
+
+                    return response()->download($tempImage, $fileName)->deleteFileAfterSend(true);
+                }
+            } else {
+                $productDownloadableSample = $this->productDownloadableSampleRepository->findOrFail(request('id'));
+
+                if ($product = $this->productRepository->findOrFail($productDownloadableSample->product_id)) {
+                    if (! $product->visible_individually) {
+                        return redirect()->back();
+                    }
+                }
+
+                if ($productDownloadableSample->type == 'file') {
+                    return app(StoredFile::class)->download($productDownloadableSample->file, $productDownloadableSample->file_name);
+                } else {
+                    if (! $this->validateExternalUrl($productDownloadableSample->url)) {
+                        abort(404);
+                    }
+
+                    $fileName = substr($productDownloadableSample->url, strrpos($productDownloadableSample->url, '/') + 1);
+
+                    $tempImage = tempnam(sys_get_temp_dir(), $fileName);
+
+                    copy($productDownloadableSample->url, $tempImage);
+
+                    return response()->download($tempImage, $fileName)->deleteFileAfterSend(true);
+                }
+            }
+        } catch (\Exception $e) {
+            abort(404);
+        }
+    }
+
+    /**
+     * Whether the storefront shows this product at all.
+     */
+    protected function isVisibleProduct($productId): bool
+    {
+        $product = $this->productRepository->find($productId);
+
+        return (bool) $product?->status
+            && (bool) $product?->visible_individually;
+    }
+}

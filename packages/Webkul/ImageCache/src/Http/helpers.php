@@ -1,0 +1,36 @@
+<?php
+
+use Illuminate\Image\ImageManager;
+use Webkul\ImageCache\ImageUrlBuilder;
+
+if (! function_exists('image_manager')) {
+    /**
+     * Get the image manager instance.
+     */
+    function image_manager(): ImageManager
+    {
+        return app('image');
+    }
+}
+
+if (! function_exists('image_url')) {
+    /**
+     * Get a stored image's url through one image cache template, naming any theme the request's images are
+     * pinned to, or null while the image cache route is off.
+     */
+    function image_url(string $path, string $template): ?string
+    {
+        return app(ImageUrlBuilder::class)->url($path, $template);
+    }
+}
+
+if (! function_exists('image_urls')) {
+    /**
+     * Get a stored image's urls through the core sizes, the templates the current theme lists under the given
+     * key of `customize.image_cache` and the original, each linking the stored file while the route is off.
+     */
+    function image_urls(string $path, ?string $key = null): array
+    {
+        return app(ImageUrlBuilder::class)->urls($path, $key);
+    }
+}

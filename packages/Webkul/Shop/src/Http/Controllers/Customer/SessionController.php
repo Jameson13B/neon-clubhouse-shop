@@ -1,0 +1,132 @@
+<?php
+
+namespace Webkul\Shop\Http\Controllers\Customer;
+
+use Illuminate\Foundation\Auth\ThrottlesLogins;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Cookie;
+use Illuminate\Support\Facades\Event;
+use Illuminate\View\View;
+use Webkul\Shop\Http\Controllers\Controller;
+use Webkul\Shop\Http\Requests\Customer\LoginRequest;
+
+class SessionController extends Controller
+{
+    use ThrottlesLogins;
+
+    /**
+     * The failed login attempts an email address and caller may make before waiting.
+     */
+    protected $maxAttempts = 6;
+
+    /**
+     * How many minutes those failed attempts are remembered for.
+     */
+    protected $decayMinutes = 1;
+
+    /**
+     * Display the resource.
+     *
+     * @return RedirectResponse|View
+     */
+    public function index()
+    {
+        if (auth()->guard('customer')->check()) {
+            return redirect()->route('shop.home.index');
+        }
+
+        return view('shop::customers.sign-in');
+    }
+
+    /**
+     * The request field holding the identifier login attempts are counted against.
+     */
+    public function username(): string
+    {
+        return 'email';
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     *
+     * @return Response
+     */
+    public function store(LoginRequest $loginRequest)
+    {
+        $credentials = $loginRequest->only(['email', 'password']);
+
+        $credentials['channel_id'] = core()->getCurrentChannel()->id;
+
+        if ($this->hasTooManyLoginAttempts($loginRequest)) {
+            $this->fireLockoutEvent($loginRequest);
+
+            return $this->sendLockoutResponse($loginRequest);
+        }
+
+        if (! auth()->guard('customer')->attempt($credentials)) {
+            $this->incrementLoginAttempts($loginRequest);
+
+            session()->flash('error', trans('shop::app.customers.login-form.invalid-credentials'));
+
+            return redirect()->back();
+        }
+
+        $this->clearLoginAttempts($loginRequest);
+
+        if (! auth()->guard('customer')->user()->status) {
+            auth()->guard('customer')->logout();
+
+            session()->flash('warning', trans('shop::app.customers.login-form.not-activated'));
+
+            return redirect()->back();
+        }
+
+        if (! auth()->guard('customer')->user()->is_verified) {
+            session()->flash('info', trans('shop::app.customers.login-form.verify-first'));
+
+            Cookie::queue(Cookie::make('enable-resend', 'true', 1));
+
+            Cookie::queue(Cookie::make('email-for-resend', $loginRequest->input('email'), 1));
+
+            auth()->guard('customer')->logout();
+
+            return redirect()->back();
+        }
+
+        /**
+         * Event passed to prepare cart after login.
+         */
+        Event::dispatch('customer.after.login', auth()->guard()->user());
+
+        if ($intended = session()->pull('shop.url.intended')) {
+            return redirect()->to($intended);
+        }
+
+        if (core()->getConfigData('customer.settings.login_options.redirected_to_page') == 'account') {
+            return redirect()->route('shop.customers.account.profile.index');
+        }
+
+        return redirect()->route('shop.home.index');
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @return Response
+     */
+    public function destroy()
+    {
+        $id = auth()->guard('customer')->user()->id;
+
+        auth()->guard('customer')->logout();
+
+        session()->invalidate();
+
+        session()->regenerateToken();
+
+        Event::dispatch('customer.after.logout', $id);
+
+        return redirect()->route('shop.home.index');
+    }
+}

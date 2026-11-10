@@ -1,0 +1,526 @@
+import path from "path";
+import { expect, Page } from "@playwright/test";
+import type { MediaFile } from "@shared/media-files";
+import { BasePage } from "../../../BasePage";
+import type { AdminPage } from "../../../../setup";
+import { ProductListPage } from "./ProductListPage";
+import { MediaGalleryField } from "../../components/MediaGalleryField";
+import { MediaUploadSection } from "../../components/MediaUploadSection";
+
+export interface NewVariantData {
+    options: Record<string, string>;
+    name: string;
+    weight: string;
+    image?: MediaFile;
+}
+
+export interface ProductEditData {
+    productNumber?: string;
+    name?: string;
+    shortDescription?: string;
+    description?: string;
+    metaTitle?: string;
+    metaKeywords?: string;
+    metaDescription?: string;
+    price?: string;
+    weight?: string;
+    inventory?: string;
+}
+
+export class ProductEditPage extends BasePage {
+    constructor(page: Page) {
+        super(page);
+    }
+
+    private get saveButton() {
+        return this.page.getByRole("button", { name: "Save Product" });
+    }
+
+    private get productNumberInput() {
+        return this.page.locator("#product_number");
+    }
+
+    private get skuInput() {
+        return this.page.locator("#sku");
+    }
+
+    private get nameInput() {
+        return this.page.locator("#name");
+    }
+
+    private get urlKeyInput() {
+        return this.page.locator("#url_key");
+    }
+
+    private get metaTitleInput() {
+        return this.page.locator("#meta_title");
+    }
+
+    private get metaKeywordsInput() {
+        return this.page.locator("#meta_keywords");
+    }
+
+    private get metaDescriptionInput() {
+        return this.page.locator("#meta_description");
+    }
+
+    private get priceInput() {
+        return this.page.locator("#price");
+    }
+
+    private get specialPriceInput() {
+        return this.page.locator('input[name="special_price"]');
+    }
+
+    private get weightInput() {
+        return this.page.locator("#weight");
+    }
+
+    private get inventoryInput() {
+        return this.page.locator('input[name="inventories\\[1\\]"]');
+    }
+
+    private get allowRmaInput() {
+        return this.page.locator('input[type="checkbox"][name="allow_rma"]');
+    }
+
+    private get allowRmaToggle() {
+        return this.page.locator('label[for="allow_rma"]');
+    }
+
+    private get updatedMessage() {
+        return this.page.getByText("Product updated successfully");
+    }
+
+    private get statusInput() {
+        return this.page.locator('input[type="checkbox"][name="status"]');
+    }
+
+    private get statusToggle() {
+        return this.page.locator('label[for="status"]');
+    }
+
+    private get validationErrors() {
+        return this.page.locator("p.text-red-600");
+    }
+
+    private get taxCategoryField() {
+        return this.page.locator(
+            'div.relative:has(> div[name="tax_category_id"])',
+        );
+    }
+
+    private get taxCategoryTrigger() {
+        return this.taxCategoryField.locator('> div[name="tax_category_id"]');
+    }
+
+    private get taxCategoryInput() {
+        return this.taxCategoryField.locator(
+            'input[type="hidden"][name="tax_category_id"]',
+        );
+    }
+
+    private taxCategoryOption(label: string) {
+        return this.taxCategoryField
+            .locator("div.max-h-60 > div")
+            .filter({ hasText: new RegExp(`^\\s*${label}\\s*$`) });
+    }
+
+    private get downloadablePanel() {
+        return this.page.locator("div.fixed").filter({ visible: true });
+    }
+
+    private panelHeaderAddButton(panelTitle: string) {
+        return this.page
+            .locator("div.box-shadow > div")
+            .filter({ has: this.page.locator(`p:text-is("${panelTitle}")`) })
+            .locator("div.secondary-button");
+    }
+
+    private get addDownloadableLinkButton() {
+        return this.panelHeaderAddButton("Downloadable Links");
+    }
+
+    private get linkTitleInput() {
+        return this.downloadablePanel.locator('input[name="title"]');
+    }
+
+    private get linkPriceInput() {
+        return this.downloadablePanel.locator('input[name="price"]');
+    }
+
+    private get linkDownloadsInput() {
+        return this.downloadablePanel.locator('input[name="downloads"]');
+    }
+
+    private get linkTypeSelect() {
+        return this.downloadablePanel.locator('select[name="type"]');
+    }
+
+    private get linkFileUploadInput() {
+        return this.downloadablePanel.locator('input[type="file"][name="file"]');
+    }
+
+    private get linkUploadedFilePath() {
+        return this.downloadablePanel.locator(
+            'input[type="hidden"][name="file"]',
+        );
+    }
+
+    private get linkPanelSaveButton() {
+        return this.downloadablePanel.getByRole("button", {
+            name: "Save",
+            exact: true,
+        });
+    }
+
+    private get linkPanelValidationError() {
+        return this.downloadablePanel.locator("p.text-red-600").first();
+    }
+
+    private get videoLimitHint() {
+        return this.page.getByText(/Maximum video size should be like \d+ KB/);
+    }
+
+    private get addVariantButton() {
+        return this.page
+            .locator(".secondary-button")
+            .filter({ hasText: "Add Variant" });
+    }
+
+    private get confirmVariantButton() {
+        return this.page.getByRole("button", { name: "Add", exact: true });
+    }
+
+    private get variantDrawerPrice() {
+        return this.page.locator('input[name="price"]').filter({ visible: true });
+    }
+
+    private get variantDrawerForm() {
+        return this.variantDrawerPrice.locator("xpath=ancestor::form[1]");
+    }
+
+    private get variantDrawerSaveButton() {
+        return this.variantDrawerForm.getByRole("button", {
+            name: "Save",
+            exact: true,
+        });
+    }
+
+    private linkRow(title: string) {
+        return this.page.getByText(title);
+    }
+
+    private variantRow(sku: string) {
+        return this.page
+            .getByText(`SKU - ${sku}`, { exact: true })
+            .locator('xpath=ancestor::div[.//p[normalize-space()="Edit"]][1]');
+    }
+
+    private variantOptionSelect(code: string) {
+        return this.page
+            .locator(`select[name="${code}"]`)
+            .filter({ visible: true });
+    }
+
+    private async saveVariantDrawer(): Promise<void> {
+        await this.variantDrawerSaveButton.click();
+
+        await expect(this.variantDrawerPrice).toHaveCount(0);
+    }
+
+    mediaAttribute(code: string): MediaUploadSection {
+        return new MediaUploadSection(this.page, code);
+    }
+
+    imagesField(): MediaGalleryField {
+        return MediaGalleryField.underHeading(this.page, "Images");
+    }
+
+    videosField(): MediaGalleryField {
+        return MediaGalleryField.underHeading(this.page, "Videos", "video");
+    }
+
+    async readVideoLimit(): Promise<number> {
+        const hint = await this.videoLimitHint.innerText();
+
+        return Number(hint.match(/(\d+) KB/)?.[1]);
+    }
+
+    async attachVariantImage(sku: string, image: MediaFile): Promise<void> {
+        await this.variantRow(sku).getByText("Edit", { exact: true }).click();
+
+        await expect(this.variantDrawerPrice).toBeVisible();
+
+        await new MediaGalleryField(this.variantDrawerForm).attach(image);
+        await this.saveVariantDrawer();
+    }
+
+    async addVariant(variant: NewVariantData): Promise<void> {
+        await this.addVariantButton.click();
+
+        for (const [code, optionId] of Object.entries(variant.options)) {
+            await this.variantOptionSelect(code).selectOption(optionId);
+        }
+
+        await this.confirmVariantButton.click();
+
+        await expect(this.variantDrawerPrice).toBeVisible();
+
+        await this.variantDrawerForm.locator('input[name="name"]').fill(variant.name);
+        await this.variantDrawerForm.locator('input[name="weight"]').fill(variant.weight);
+
+        if (variant.image) {
+            await new MediaGalleryField(this.variantDrawerForm).attach(variant.image);
+        }
+
+        await this.saveVariantDrawer();
+    }
+
+    async waitForForm() {
+        await this.waitForVueMount();
+
+        await expect(this.saveButton).toBeVisible();
+        await expect(this.skuInput).toHaveValue(/.+/);
+    }
+
+    async openProduct(name: string) {
+        await new ProductListPage(this.page).openProduct(name);
+        await this.waitForForm();
+    }
+
+    async fillGeneralDetails(data: ProductEditData) {
+        if (data.productNumber) {
+            await this.productNumberInput.fill(data.productNumber);
+        }
+
+        if (data.name) {
+            await this.nameInput.fill(data.name);
+
+            await expect(this.urlKeyInput).toHaveValue(/.+/);
+        }
+    }
+
+    async fillDescriptions(shortDescription?: string, description?: string) {
+        if (shortDescription) {
+            await (this.page as AdminPage).fillInTinymce(
+                "#short_description_ifr",
+                shortDescription,
+            );
+        }
+
+        if (description) {
+            await (this.page as AdminPage).fillInTinymce(
+                "#description_ifr",
+                description,
+            );
+        }
+    }
+
+    async fillMeta(data: ProductEditData) {
+        if (data.metaTitle) {
+            await this.metaTitleInput.fill(data.metaTitle);
+        }
+
+        if (data.metaKeywords) {
+            await this.metaKeywordsInput.fill(data.metaKeywords);
+        }
+
+        if (data.metaDescription) {
+            await this.metaDescriptionInput.fill(data.metaDescription);
+        }
+    }
+
+    async fillPrice(price: number | string) {
+        await this.priceInput.fill(String(price));
+    }
+
+    async fillWeight(weight: number | string) {
+        await this.weightInput.fill(String(weight));
+    }
+
+    async fillInventory(quantity: number | string) {
+        await this.inventoryInput.click();
+        await this.inventoryInput.fill(String(quantity));
+    }
+
+    async setAllowRma(enabled: boolean) {
+        if ((await this.allowRmaInput.isChecked()) !== enabled) {
+            await this.allowRmaToggle.click();
+        }
+
+        await expect(this.allowRmaInput).toBeChecked({ checked: enabled });
+    }
+
+    async setTaxCategory(label: string) {
+        await this.taxCategoryTrigger.click();
+        await this.taxCategoryOption(label).click();
+
+        await expect(this.taxCategoryInput).toHaveValue(/\d+/);
+        await expect(this.taxCategoryTrigger).toContainText(label);
+    }
+
+    async assignTaxCategory(productName: string, label: string) {
+        await this.openProduct(productName);
+        await this.setTaxCategory(label);
+        await this.saveProduct();
+        await this.expectProductUpdated();
+    }
+
+    async saveProduct() {
+        await this.saveButton.click();
+    }
+
+    async saveAndVerifyUpdated(redirectToList: boolean = true) {
+        await this.saveProduct();
+        await this.expectProductUpdated();
+
+        if (redirectToList) {
+            await this.visit("admin/catalog/products");
+        }
+    }
+
+    async setSpecialPrice(name: string, price: string) {
+        await this.openProduct(name);
+        await this.specialPriceInput.fill(price);
+        await this.saveProduct();
+        await this.expectProductUpdated();
+    }
+
+    async updatePrice(name: string, price: string): Promise<void> {
+        await this.openProduct(name);
+        await this.fillPrice(price);
+        await this.saveProduct();
+        await this.expectProductUpdated();
+    }
+
+    async setStatus(name: string, enabled: boolean): Promise<void> {
+        await this.openProduct(name);
+
+        if ((await this.statusInput.isChecked()) !== enabled) {
+            await this.statusToggle.click();
+        }
+
+        await expect(this.statusInput).toBeChecked({ checked: enabled });
+
+        await this.saveProduct();
+        await this.expectProductUpdated();
+    }
+
+    async submitWithoutRequiredFields(name: string): Promise<void> {
+        await this.openProduct(name);
+        await this.nameInput.fill("");
+        await this.priceInput.fill("");
+        await this.saveProduct();
+    }
+
+    async expectProductUpdated() {
+        await expect(this.updatedMessage).toBeVisible();
+    }
+
+    async expectProductCreated() {
+        await expect(
+            this.page.getByText("Product created successfully"),
+        ).toBeVisible();
+    }
+
+    async expectTaxCategoryAssigned(productName: string, label: string) {
+        await this.openProduct(productName);
+
+        await expect(this.taxCategoryTrigger).toContainText(label);
+    }
+
+    async expectPriceInEditForm(name: string, price: string): Promise<void> {
+        await this.openProduct(name);
+
+        await expect(this.priceInput).toHaveValue(new RegExp(`^${price}(\\.0+)?$`));
+    }
+
+    async expectValidationError(message: string): Promise<void> {
+        await expect(
+            this.validationErrors.filter({ hasText: message }).first(),
+        ).toBeVisible();
+    }
+
+    async fillDownloadableLink(
+        title: string,
+        filePath: string,
+        downloads: number | string,
+    ) {
+        await this.addDownloadableLinkButton.click();
+        await this.linkTitleInput.waitFor({ state: "visible" });
+        await this.linkTitleInput.fill(title);
+        await this.linkPriceInput.fill("0");
+        await this.linkDownloadsInput.fill(downloads.toString());
+        await this.linkTypeSelect.selectOption("file");
+        await this.linkFileUploadInput.setInputFiles(filePath);
+
+        await expect(this.linkUploadedFilePath).not.toHaveValue("");
+        await expect(
+            this.downloadablePanel.getByText(path.basename(filePath)),
+        ).toBeVisible();
+    }
+
+    async addDownloadableLink(
+        title: string,
+        filePath: string,
+        downloads: number | string,
+    ) {
+        await this.fillDownloadableLink(title, filePath, downloads);
+        await this.linkPanelSaveButton.click();
+
+        await expect(this.linkPanelSaveButton).toBeHidden();
+        await expect(this.linkRow(title)).toBeVisible();
+    }
+
+    async attemptDownloadableLink(
+        title: string,
+        filePath: string,
+        downloads: number | string,
+    ) {
+        await this.fillDownloadableLink(title, filePath, downloads);
+        await this.linkPanelSaveButton.click();
+    }
+
+    async expectDownloadableLinkRefused(title: string): Promise<void> {
+        await expect(this.linkPanelSaveButton).toBeVisible();
+        await expect(this.linkPanelValidationError).toBeVisible();
+        await expect(this.linkRow(title)).toHaveCount(0);
+    }
+
+    async expectDownloadableLinkListed(title: string): Promise<void> {
+        await expect(this.linkRow(title)).toBeVisible();
+    }
+
+    async expectVariantListed(sku: string): Promise<void> {
+        await expect(this.variantRow(sku)).toBeVisible();
+    }
+
+    async expectVariantImageError(sku: string, message: string): Promise<void> {
+        await expect(this.variantRow(sku).getByText(message)).toBeVisible();
+    }
+
+    async expectVariantsPanelError(message: string): Promise<void> {
+        await expect(this.page.getByText(message)).toBeVisible();
+    }
+
+    async expectVariantWithoutImage(sku: string): Promise<void> {
+        await expect(
+            this.variantRow(sku).locator('img[src*="/storage/"]'),
+        ).toHaveCount(0);
+    }
+
+    async expectVariantImageStored(sku: string): Promise<void> {
+        const image = this.variantRow(sku).locator("img");
+
+        await expect(image).toHaveAttribute("src", /storage\/product/);
+
+        await expect
+            .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+            .toBeGreaterThan(0);
+    }
+
+    async expectStillOnEditForm(): Promise<void> {
+        await expect(this.page).toHaveURL(/catalog\/products\/edit\/\d+/);
+    }
+}

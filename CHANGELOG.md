@@ -1,0 +1,147 @@
+# CHANGELOG for v2.5
+
+This changelog consists of the bug & security fixes and new features being included in the releases listed below.
+
+## **v2.5.1 (6th of November 2026)** - *Release*
+
+- Fixed the nginx production image answering every resized image with a 404 status, though the image itself was served.
+
+- Image urls now follow the path set in `imagecache.route` instead of always `cache/`, and setting it to null or empty turns the image cache off rather than breaking the images it serves; product, category and section images then link their full-size stored files.
+
+- Fixed an entry in `config/imagecache.php` naming a missing class, or one without `applyFilter()`, silently serving full-size originals. It is now logged, and `small`, `medium` and `large`, broken or left out, fall back to the image cache's own 100, 300 and 600 pixel square crops.
+
+- Image cache templates are now built by the container, so a template may type-hint what its constructor needs; an object listed in `imagecache.templates` is no longer applied, so list its class name instead.
+
+- The image cache now logs, at most once an hour each, a remote storage disk it cannot read or reach, as with wrong credentials, and a stored image it fails to resize.
+
+- The Appearance preview now cuts the images its sections show as the previewed theme does, including templates only that theme registers, rather than as the theme of the channel the admin domain resolves to.
+
+- The new `search-images:prune` command, which Laravel's scheduler runs daily at 00:05, deletes every image search upload from before today, along with the `product-search/` folder earlier releases kept them in.
+
+- Fixed storefront paths that merely begin with the admin URL, such as `/admin-tools`, staying open during maintenance.
+
+- Fixed storefront pages whose url held the admin URL and a slash anywhere but at the start of the path answering not found, and an `APP_ADMIN_URL` ending in a slash breaking the admin panel.
+
+- A path under the admin URL naming a storefront category, such as `/admin/shoes`, now answers not found instead of redirecting to `/shoes`.
+
+- While the store is down with `php artisan down --redirect` or `--render`, a request expecting JSON now gets the 503 instead of the redirect or page. With `APP_DEBUG` off, the 503 page and JSON now also carry the `Retry-After` and `Refresh` headers `--retry` and `--refresh` set.
+
+- Added the currencies of the East African Community — the Tanzanian, Kenyan, Ugandan and Somali shillings, the Rwandan, Burundian and Congolese francs, and the South Sudanese pound — to the installer.
+
+- Added Swahili (Kiswahili) as a supported locale, translated across the admin, the storefront and the installer.
+
+- Refined the admin form for a downloadable product's links.
+
+- Media already on the site can be copied onto Amazon S3 or Cloudflare R2, from a Sync button in Configuration → File Management or with `php artisan bagisto:storage:sync`. A file the target already holds is passed over, so an interrupted run is resumed by running it again.
+
+- Adding a product to the cart without a quantity no longer fails with an error and is taken as one.
+
+- Fixed a Configuration → File Management page failing with an exception when a remote storage driver was chosen and one of its settings had never been saved.
+
+- Fixed Buy Now emptying the cart it was started from. A Buy Now now checks out on its own cart and mirrors the item into the main cart, so an unfinished or abandoned Buy Now stays in the cart and a completed one is taken back out.
+
+- Fixed the shipping estimate quoting a total it then threw away, leaving the cart with a chosen shipping method and no shipping in the grand total.
+
+- Fixed a product added beside one already in the cart in the same request going untaxed, which understated the tax and total on an admin reorder.
+
+- Fixed a guest login with items in both carts ending up with no cart at all, and starting a second one on the next add.
+
+- Fixed a cart emptied of its last item lingering until the next request, which reported a minimum-order error instead of an empty cart.
+
+- Hardened the remove-selected-items request to reject a missing, non-array, or duplicate selection with a validation error instead of silently accepting it.
+
+- Refactored internals for clearer responsibilities.
+
+- Carried across every fix released on the 2.4 line, which the v2.4 changelog lists in full.
+
+- #11547 [fixed] - A missing cached image showed the default theme's error page on a store running its own channel theme. The error page now uses the channel's theme.
+
+- #11546 [fixed] - A route parameter sharing its name with a Bagisto model, such as `{template}` or `{product}`, was silently looked up as that model and answered 404. Such a parameter is now a plain value unless the route type-hints a model.
+
+- #11531 [fixed] - A PayPal Standard buyer who paid but never returned to the store got no order, and every retry of PayPal's notification failed. The notification now places the order itself.
+
+- #11527 [fixed] - An invoice could not be saved again after being created, failing with an unknown column error.
+
+## **v2.5.0 (6th of October 2026)** - *Release*
+
+- Added PostgreSQL support with database grammar abstraction layer, model boolean casts, and cross-database query compatibility.
+
+- Upgraded to Laravel 13 on PHP 8.4 with Pest 5 / PHPUnit 13, refreshed config and skeleton files, and major bumps across `nestedset`, `l5-repository`, `concord`, `tinker` and `debugbar`.
+
+- Upgraded the Admin, Shop and Installer frontends to Tailwind CSS 4, moving configuration into each `app.css` under `@theme` and replacing the JavaScript config and PostCSS pipeline.
+
+- Moved image processing onto Laravel's `Illuminate\Image` component, dropping the Intervention wrapper and moving the driver setting from `config/image.php` to `config/images.php`.
+
+- Reworked the icon fonts as Tailwind utilities declared in `@theme`, renaming number-named glyphs (`icon-cancel-1` → `icon-close`), dropping unused ones, and adding a test that guards every icon.
+
+- Refactored core search architecture to engine-agnostic design using Strategy + Manager patterns.
+
+- Added a command palette to the admin, opened with Ctrl + K, which searches menus, configuration settings, actions and records from one place, or is walked from a section to a page to a record to what may be done with it, showing only what the signed-in admin may reach.
+
+- Added real-time admin notifications, so the notification bell updates as orders are placed instead of only on a page load. Broadcasting stays off until `BROADCAST_CONNECTION` is set, and needs a worker on the `broadcastable` queue.
+
+- Added Amazon S3 and Cloudflare R2 as storage drivers, chosen in Configuration → File Management; the local disk stays the default.
+
+- Added a Search Engines configuration section, gathering the engine, the per-context search modes and the Elasticsearch host, credentials and index prefix — which had been settable only in the environment file — into one place with a connection test, and a migration carrying the stored values over.
+
+- Enhanced the Admin → Configuration sections, reordered into General, Magic AI, Sales, Catalog, Customer, Email, Search Engines, File Management and Cache Management with a clean sort sequence, and moved the Buy Now toggle and the My Cart settings to the pages they belong to, with a migration carrying the stored values over.
+
+- Added a `layout` key to configuration items, hiding the describing column, the save button, the channel switcher or the locale switcher on that page. The About section uses it, and a save now resolves its own channel and locale rather than expecting the switchers to post them.
+
+- Reworked every image and file setting in Admin → Configuration onto one upload tile carrying its own replace, download and delete actions, replacing the bare file input and delete checkbox whose preview sat sixty pixels low over the field beneath it. Deleting a setting now removes the stored file along with the value.
+
+- Upgraded the product image and file attributes to the media control the configuration screens use, with a preview tile and replace, download and remove actions.
+
+- Updated the Magic AI model lists to each provider's current models, such as GPT-6, Claude Opus 5, Gemini 3.8 and Grok 4.7, and dropped the retired ones. Storefront features saved on a retired model move to its provider's recommended replacement.
+
+- Fixed Magic AI taking its orders from storefront text: a review or customer name could steer what the review translation and the checkout message returned. Shopper-supplied text is now sent as data, apart from the instructions.
+
+- Fixed the generated checkout message rendering as markup on the order success page, and closed the review translation endpoint to anonymous use while the feature is switched off, now rate limited and with a review length cap.
+
+- Fixed Magic AI hiding why a generation failed — the provider's own message, such as a rejected prompt or an invalid API key, now reaches the admin.
+
+- Fixed Magic AI handing a model the store no longer offers to a different provider, which failed with an unrelated error. The unknown model is now reported.
+
+- Theme section media now resolves against the site serving the page, so a store served from a directory below the document root shows its static content and its carousel. An upload is kept in the markup as a reference rather than as a fixed url.
+
+- Removed the two migrations that rewrote theme section paths and urls. Every spelling a section has ever recorded is understood as it is read, so an upgrade converts nothing.
+
+- Reorganised the storage directories into plural, kebab-case names, with each product's downloadable files and each return's attachments kept under the record they belong to. A migration moves them.
+
+- Renamed every hyphenated route name to snake_case, such as `admin.sales.rma.requests.send-message` to `send_message`. URLs are unchanged, but a module calling `route()` with an old name must be updated.
+
+- Renamed the remaining underscored translation keys to kebab-case across all 22 locales, so a module or theme overriding one of them, such as `eu_withdrawal.view.received_at`, must use the new spelling.
+
+- Moved the storefront breadcrumb definitions into the Shop package and removed `routes/breadcrumbs.php`. Delete your copy when upgrading, or the same trails register twice and every page carrying a breadcrumb fails.
+
+- Added MariaDB and PostgreSQL to the Laravel Sail stack, and an optional nginx, apache or OpenLiteSpeed server in front of it. Each is a Compose profile, and the database container follows `DB_CONNECTION`.
+
+- Updated the Laravel Sail setup to build on PHP 8.4, run Elasticsearch and Kibana 8.19 to match the 8.x client, keep Elasticsearch data across restarts and use the official MySQL image.
+
+- Published production Docker images for PostgreSQL alongside MySQL as `<version>-<server>-<database>`, such as `2.5.0-nginx-postgres`; existing MySQL tags are unchanged.
+
+- Updated the production Docker images to build the 2.5.0 release by default, and let the bundled MySQL user take the server's own authentication plugin instead of the deprecated one.
+
+- Applied the security fixes from an AI security audit of the codebase.
+
+- Carried across every fix released on the 2.4 line, which the v2.4 changelog lists in full.
+
+- #11209 [feature] - Added Omnibus package for EU Omnibus Directive compliance, recording per-channel lowest-price snapshots and showing the 30-day historical low for discounted products.
+
+- #11467 [fixed] - Fixed three storefront loading skeletons — the home page View All button under a product carousel, the category Load More button and the checkout shipping method — standing at dimensions that did not match the control they hold the place of.
+
+- #11466 [fixed] - Fixed the category Load More button collapsing to less than half its width the moment it was clicked. Its loading state now keeps the width of the button it replaces.
+
+- #11465 [fixed] - Fixed a stray slash separator rendering after the final crumb on every page carrying breadcrumbs, so a trail now ends on the current page name.
+
+- #11464 [fixed] - Fixed a pair of unused colour circles showing under the price on product listing cards in list view. They came from a placeholder that was never wired to product data, and it has been removed.
+
+- #11447 [fixed] - Fixed a stray pair of arrows sitting in the middle of the storefront account listings. The datagrid footer held a second previous and next control beside the paginator, invisible while its icon classes had no glyphs and revealed by the icon rework; the paginator already carries both arrows and a page number, so it is now the only one.
+
+- #11442 [fixed] - Fixed the blank space below the product view page, caused by a height class that Tailwind 4 resolves and Tailwind 3 ignored.
+
+- #11423 [fixed] - Fixed the storefront order details tabs staying on the loading shimmer, the same discarded slot that left the product page tabs empty.
+
+- #11422 [fixed] - Fixed the product page tabs staying on the loading shimmer. The component emitted a Vue slot in place of the Blade slot holding them, so every tab item was dropped.
+
+- #10816 [fixed] - Fixed theme section images breaking when the store domain changed or a remote disk was used; paths are now stored bare and resolved when rendered.
